@@ -1,6 +1,6 @@
 # Architecture
 
-This repository is a Bun-powered Turborepo monorepo for an AI interview practice app called `fitfortherole`. The application collects a candidate's GitHub profile URL and resume text, creates a pre-interview profile from that data, stores it in PostgreSQL, and then starts a browser-based live voice interview with Gemini Live using that stored context.
+This repository is a Bun-powered Turborepo monorepo for an AI interview practice app called `fitfortherole`. A candidate provides a job description, a resume (PDF or text), and optionally a GitHub profile. The backend turns that into a stored interview profile, runs a five-minute voice interview through Gemini Live, saves the transcript, and scores it into a feedback report.
 
 ## Tech Stack
 
@@ -8,43 +8,41 @@ This repository is a Bun-powered Turborepo monorepo for an AI interview practice
 
 - **Package manager/runtime:** Bun `1.3.14`
 - **Monorepo orchestration:** Turborepo
-- **Language:** TypeScript
+- **Language:** TypeScript (strict, `noUncheckedIndexedAccess`)
 - **Workspace layout:** `apps/*` and `packages/*`
 - **Root scripts:**
-  - `bun run dev`: runs Turbo `dev` tasks
-  - `bun run build`: runs Turbo `build` tasks
-  - `bun run lint`: runs Turbo `lint` tasks
-  - `bun run check-types`: runs Turbo type checks
+  - `bun run dev`: runs Turbo `dev` tasks (frontend and backend)
+  - `bun run build`: runs Turbo `build` tasks (frontend bundle to `dist/`)
+  - `bun run test`: runs `bun test` in both apps
+  - `bun run check-types`: runs `tsc --noEmit` in every workspace
 
 ### Frontend
 
 - **Framework:** React 19
-- **Routing:** React Router
-- **Bundling/dev server:** Bun `serve` with HMR
+- **Routing:** React Router 7
+- **Bundling/dev server:** Bun `serve` with HMR; `build.ts` for production
 - **Styling:** Tailwind CSS 4, `tw-animate-css`, CSS theme tokens
 - **UI primitives:** Radix UI primitives, class-variance-authority, local shadcn-style components
 - **Notifications:** Sonner
-- **HTTP client:** Axios and browser `fetch`
-- **Audio/WebSocket:** Browser Web APIs: `WebSocket`, `AudioContext`, `AudioWorklet`, `MediaDevices`
+- **HTTP client:** browser `fetch`, wrapped in `src/lib/api.ts`
+- **Audio/WebSocket:** `WebSocket`, `AudioContext`, `AudioWorklet`, `MediaDevices`
 
 ### Backend
 
 - **Runtime:** Bun
-- **HTTP server:** Express 5
-- **Validation:** Zod
-- **Database ORM:** Prisma 7
+- **HTTP server:** Express 5 (async handler errors reach the error middleware)
+- **Validation:** Zod 4, for requests, LLM output, and JSON read back from the database
+- **Database ORM:** Prisma 7 with the `pg` driver adapter
 - **Database:** PostgreSQL
-- **External APIs:**
-  - GitHub REST API for repository metadata
-  - Gemini auth token API for ephemeral Live API tokens
-  - Gemini Live WebSocket API is called directly from the frontend
-- **Proxy support:** `https-proxy-agent` via `PROXY_URL`
+- **External APIs** (all through axios, with optional `PROXY_URL`):
+  - GitHub REST API for public repositories
+  - Gemini `generateContent` with structured output, for resume extraction, job fit, and scoring
+  - Gemini auth token API for single-use Live tokens with the session config locked in
+- **Browser-side external API:** the Gemini Live WebSocket, opened directly from the browser with the ephemeral token
 
 ### Shared Packages
 
-- `packages/ui`: small reusable React component package generated from the Turborepo starter. It is not currently used by the frontend app, which has its own local UI components.
-- `packages/eslint-config`: shared ESLint configs.
-- `packages/typescript-config`: shared TypeScript config package.
+`packages/ui`, `packages/eslint-config`, and `packages/typescript-config` are Turborepo starter scaffolding. Neither app uses them.
 
 ## Repository Structure
 
@@ -52,102 +50,72 @@ This repository is a Bun-powered Turborepo monorepo for an AI interview practice
 .
 |-- apps
 |   |-- backend
-|   |   |-- agents
-|   |   |-- lib
-|   |   |-- prisma
-|   |   |-- scrapers
-|   |   |-- index.ts
-|   |   |-- proxy.ts
-|   |   |-- sideband.ts
-|   |   `-- types.ts
+|   |   |-- agents             LLM steps: resumeExtractor, jdFeedbackAgent, interviewEvaluator
+|   |   |-- lib                gemini (structured output), liveSession (prompt + Live setup),
+|   |   |                      interviewContext (lenient JSON readers), resumeParser (fallback),
+|   |   |                      httpError
+|   |   |-- prisma             schema, migrations, client singleton
+|   |   |-- routes             interviews.ts: every /api/v1 route
+|   |   |-- scrapers           github.ts
+|   |   |-- index.ts           app setup, CORS, error handling
+|   |   |-- sideband.ts        ephemeral Live tokens
+|   |   |-- proxy.ts           optional HTTPS proxy agent
+|   |   `-- types.ts           request schemas
 |   `-- frontend
 |       |-- src
-|       |   |-- components
-|       |   |-- lib
-|       |   |-- App.tsx
-|       |   |-- config.ts
-|       |   |-- frontend.tsx
-|       |   |-- index.html
-|       |   `-- index.ts
+|       |   |-- components     Form, Interview, Result, ui/*
+|       |   |-- lib            api, geminiLive, audioUtils, transcript, utils
+|       |   |-- App.tsx        routes
+|       |   `-- config.ts      BACKEND_URL from BUN_PUBLIC_BACKEND_URL
 |       |-- styles
 |       `-- build.ts
-|-- packages
-|   |-- eslint-config
-|   |-- typescript-config
-|   `-- ui
-|-- package.json
+|-- packages                   unused starter scaffolding
 |-- turbo.json
-`-- bun.lock
+`-- package.json
 ```
+
+Tests live next to the code they cover (`*.test.ts`).
 
 ## High-Level Design
 
 ### Primary User Flow
 
-1. The user opens the frontend at `/`.
-2. `Form` collects:
-   - GitHub profile URL
-   - pasted resume text
-3. The frontend sends `POST /api/v1/pre-interview` to the backend.
-4. The backend validates the request with Zod.
-5. The backend extracts the GitHub username from the URL.
-6. The backend fetches public repository metadata from the GitHub API.
-7. The backend parses the resume text into structured resume data.
-8. The backend compares resume/GitHub signals with `apps/backend/jd.txt`.
-9. The backend creates an `Interview` row in PostgreSQL.
-10. The frontend navigates to `/interview/:interviewId`.
-11. The interview screen fetches:
-    - a Gemini ephemeral token from `GET /api/v1/gemini/session`
-    - stored interview context from `GET /api/v1/interviews/:id/context`
-12. The frontend opens a Gemini Live WebSocket directly from the browser.
-13. Browser microphone audio is streamed to Gemini as 16 kHz PCM.
-14. Gemini audio is played back through an `AudioWorklet`.
-15. Input and output transcriptions are displayed as chat bubbles.
+1. `/` (`Form`) collects a job description, a resume as a PDF (up to 4 MB) or pasted text, and an optional GitHub profile URL.
+2. `POST /api/v1/pre-interview` validates the input. In parallel it:
+   - fetches the candidate's non-fork GitHub repositories (optional; an outage becomes a warning, a missing user is a 404),
+   - extracts structured resume data with Gemini, which reads PDFs natively (pasted text falls back to a regex parser),
+   - assesses job fit with Gemini as soon as the repositories arrive (falls back to keyword matching).
+3. The backend stores an `Interview` with status `pre`, and the browser navigates to `/interview/:id`.
+4. `POST /api/v1/interviews/:id/session` builds the complete Live session config: the interview plan, the candidate context, the `end_interview` tool, and transcription. It mints a single-use token with that config locked in, moves the interview to `InProgress`, and returns the token, the model, the duration, and the next transcript sequence number.
+5. The browser opens the Live WebSocket, sends only `{ setup: { model } }`, and starts the conversation with a `realtimeInput` text message. The interviewer greets the candidate by name.
+6. Microphone audio streams to Gemini as 16 kHz PCM, and Gemini's 24 kHz audio plays through an `AudioWorklet`. Input and output transcriptions build the transcript. Each finished turn is saved with `POST /api/v1/interviews/:id/messages`.
+7. The interview ends when the model calls `end_interview` after its goodbye, when the five-minute clock runs out (the interviewer is told the time is up and the wrap-up turn ends it, with a 30-second backstop), or when the candidate clicks **End interview**. The browser re-sends the full transcript and opens `/result/:id`.
+8. `Result` calls `POST /api/v1/interviews/:id/complete`, which marks the interview `Done`, scores the transcript once, and returns the report.
 
 ### System Context
 
 ```text
-User Browser
-  |
-  | HTTP
+Browser
+  |  fetch
   v
-Frontend React App
+Frontend (React)  --- WebSocket + ephemeral token --->  Gemini Live API
   |
-  | POST /api/v1/pre-interview
+  |  /api/v1
   v
-Backend Express API
-  |          |
-  |          | GitHub REST API
-  |          v
-  |      GitHub
-  |
-  | Prisma
+Backend (Express) --- axios ---> GitHub REST API
+  |               --- axios ---> Gemini generateContent (extract, fit, score)
+  |               --- axios ---> Gemini auth_tokens (locked Live config)
+  |  Prisma
   v
 PostgreSQL
-
-Frontend React App
-  |
-  | GET /api/v1/gemini/session
-  v
-Backend Express API
-  |
-  | Gemini token API
-  v
-Google Generative Language API
-
-Frontend React App
-  |
-  | Gemini Live WebSocket with ephemeral token
-  v
-Gemini Live API
 ```
 
 ### Main Architectural Boundaries
 
-- **Frontend app:** owns user interaction, routing, microphone capture, Gemini Live WebSocket lifecycle, audio playback, and transcript rendering.
-- **Backend API:** owns request validation, GitHub scraping, resume parsing, JD-fit scoring, database persistence, CORS, and server-side Gemini token creation.
-- **Database:** stores interview records, structured pre-interview context, match feedback, and the schema for future conversation persistence.
-- **External AI service:** Gemini handles real-time interview question generation, voice output, and transcription streams.
+- **Frontend:** user input, routing, microphone capture, the Live WebSocket, audio playback, transcript assembly, the interview clock, and the report view. It never sees the prompt or the raw resume.
+- **Backend:** validation, GitHub and resume processing, job fit, prompt and session construction, token minting, transcript storage, the interview lifecycle, and scoring.
+- **Database:** interview records, structured candidate context, transcripts, and evaluations.
+- **Gemini Live:** real-time questions, voice, and transcription, constrained by the locked config.
 
 ## Low-Level Design
 
@@ -155,134 +123,74 @@ Gemini Live API
 
 ### Entry Points
 
-- `apps/frontend/src/index.ts`
-  - Starts Bun's frontend server.
-  - Serves `index.html` for all unmatched routes so React Router can handle client-side routing.
-  - Contains starter `/api/hello` sample routes that are separate from the actual backend API.
-
-- `apps/frontend/src/index.html`
-  - Loads fonts and mounts the React app through `frontend.tsx`.
-
-- `apps/frontend/src/frontend.tsx`
-  - Creates the React root.
-  - Renders `App` inside `StrictMode`.
-  - Preserves the root across Bun hot reloads using `import.meta.hot.data`.
+- `src/index.ts`: Bun's dev server; serves `index.html` for every route so React Router can handle client-side routing.
+- `src/index.html`: loads fonts and mounts the app through `frontend.tsx`.
+- `src/frontend.tsx`: creates the React root in `StrictMode` and keeps it across hot reloads.
+- `build.ts`: production bundle with absolute asset URLs (`publicPath: "/"`) so deep links load, and `BUN_PUBLIC_*` variables inlined.
 
 ### Routing
 
-`apps/frontend/src/App.tsx` defines three routes:
+`src/App.tsx`:
 
-- `/`: renders `Form`
-- `/interview/:interviewId`: renders `Interview`
-- `/result`: renders `Result`
+- `/`: `Form`
+- `/interview/:interviewId`: `Interview`
+- `/result/:interviewId`: `Result`
+- `/result`: redirects to `/`
+
+### API Client
+
+`src/lib/api.ts` wraps `fetch`. Error responses become `ApiError(status, message)` using the server's `message`, and network failures become a readable "can't reach the server" error. It exports typed calls for every endpoint and the report types.
 
 ### Form Screen
 
-`apps/frontend/src/components/Form.tsx`
+`src/components/Form.tsx`
 
-Responsibilities:
-
-- Stores `githubUrl`, `resumeText`, and `loading` in React state.
-- Performs minimal client-side validation.
-- Calls `POST ${BACKEND_URL}/api/v1/pre-interview`.
-- Navigates to `/interview/:interviewId` after successful pre-interview setup.
-- Uses Sonner to show validation and failure messages.
-
-Important dependency:
-
-- `apps/frontend/src/config.ts` hardcodes `BACKEND_URL` as `http://localhost:3001`.
+- Job description textarea, resume as PDF (click or drop, 4 MB limit checked client-side) or pasted text, and optional GitHub URL.
+- Reads a PDF as base64 with `FileReader` and posts it with the rest of the form.
+- Shows server validation messages and warnings (for example, GitHub unreachable) as toasts.
 
 ### Interview Screen
 
-`apps/frontend/src/components/Interview.tsx`
+`src/components/Interview.tsx`
 
-Responsibilities:
+- On mount: `POST /session`. A `409` (already finished) redirects to the report.
+- Creates `GeminiLiveAPI` and `AudioPlayer`. On setup complete it sends the kickoff text and starts the clock.
+- Transcript: `lib/transcript.ts` merges streamed chunks into entries. A speaker change closes the open entry, and turn-complete or interrupted events close the interviewer's entry. Each closed entry is saved right away.
+- Ending: `finishInterview()` stops the clock and mic, lets the goodbye finish (`AudioPlayer.drain`) or cuts playback, disconnects, re-sends the whole transcript, and navigates to the report. Pending timers are ignored after unmount.
+- UI: countdown badge (highlighted in the last 30 seconds), transcript bubbles with auto-scroll, a mic hint, and the **Start Mic** and **End interview** buttons.
 
-- Reads `interviewId` from the route.
-- Fetches Gemini token and interview context in parallel.
-- Builds a private Gemini system instruction from:
-  - parsed resume data
-  - GitHub metadata
-  - JD feedback
-- Creates and owns a `GeminiLiveAPI` instance.
-- Creates and owns an `AudioPlayer` instance.
-- Starts/stops microphone streaming through `AudioStreamer`.
-- Maintains connection status, microphone state, and chat transcript state.
-- Appends streamed transcript chunks into the latest message bubble until a turn completes.
+### Transcript Reducer
 
-Lifecycle:
-
-- On mount:
-  - fetch token and context
-  - initialize Gemini client
-  - initialize audio player
-  - connect WebSocket
-- On Gemini setup complete:
-  - mark connected
-  - seed the first interview prompt
-- On unmount or disconnect:
-  - stop microphone stream
-  - destroy audio player
-  - close WebSocket
+`src/lib/transcript.ts` is pure and unit-tested. Entries carry a `seq` that continues from the server's `nextSeq` after a reconnect. Whitespace-only entries are dropped and their `seq` reused. It returns the entries each update closed, so the component knows what to save.
 
 ### Gemini Live Client
 
-`apps/frontend/src/lib/geminiLive.ts`
+`src/lib/geminiLive.ts`
 
-Responsibilities:
-
-- Wraps the Gemini Live WebSocket protocol.
-- Sends setup configuration with:
-  - model URI
-  - response modalities
-  - speech voice config
-  - system instruction
-  - realtime input config
-  - optional input/output transcription config
-  - optional history config
-- Sends:
-  - initial text via `clientContent`
-  - later text via `realtimeInput`
-  - audio chunks via `realtimeInput.audio`
-- Parses server messages into normalized frontend events:
-  - `SETUP_COMPLETE`
-  - `AUDIO`
-  - `TEXT`
-  - `INPUT_TRANSCRIPTION`
-  - `OUTPUT_TRANSCRIPTION`
-  - `INTERRUPTED`
-  - `TURN_COMPLETE`
-
-Current configured model in `Interview.tsx`:
-
-- `gemini-3.1-flash-live-preview`
+- Connects to `BidiGenerateContentConstrained` with the ephemeral token and sends `{ setup: { model } }`. Every other setup field is locked into the token by the backend and would be ignored anyway.
+- Sends realtime text, realtime audio, and tool responses.
+- Normalizes server messages into `SETUP_COMPLETE`, `AUDIO`, `TEXT`, `INPUT_TRANSCRIPTION`, `OUTPUT_TRANSCRIPTION`, `INTERRUPTED`, `TURN_COMPLETE`, and `TOOL_CALL`.
+- Why realtime text for the kickoff: on `gemini-3.1-flash-live-preview`, `clientContent` turns are only accepted as initial history and produce no reply.
 
 ### Audio Utilities
 
-`apps/frontend/src/lib/audioUtils.ts`
+`src/lib/audioUtils.ts`
 
-`AudioStreamer`:
+- `AudioStreamer`: microphone at 16 kHz with echo cancellation, noise suppression, and gain control, then an `AudioWorklet`, Float32 to PCM16, base64, and `sendAudioMessage`.
+- `AudioPlayer`: base64 PCM16 at 24 kHz into a queueing `AudioWorklet`. `interrupt()` clears the queue, and `drain()` waits for queued audio to finish (tracked in `AudioContext` time).
 
-- Requests microphone access with echo cancellation, noise suppression, and auto gain control.
-- Creates a 16 kHz `AudioContext`.
-- Uses an inline `AudioWorkletProcessor` to buffer microphone samples.
-- Converts Float32 audio to PCM16.
-- Encodes PCM16 chunks as base64.
-- Sends chunks to Gemini through `GeminiLiveAPI.sendAudioMessage`.
+### Result Screen
 
-`AudioPlayer`:
+`src/components/Result.tsx`
 
-- Creates a 24 kHz playback `AudioContext`.
-- Uses an inline `AudioWorkletProcessor` to queue PCM audio.
-- Decodes Gemini base64 PCM16 audio into Float32 samples.
-- Plays audio through the browser audio destination.
-- Supports interruption by clearing the queued audio.
+- Calls `POST /complete`, which is idempotent, so a refresh or retry never scores twice. Shows a loading state, and an error state with retry.
+- Report: overall score as a hero figure (0-100), one meter per dimension (score as text beside it), strengths, improvements, per-question feedback, the resume match with evidence and gaps, and the transcript in a collapsible section.
+- An interview with no real answers shows an explanation instead of scores.
 
 ### Styling and UI
 
-- `apps/frontend/styles/globals.css` defines Tailwind imports, theme tokens, fonts, color palette, and base body styles.
-- `apps/frontend/src/components/ui/*` contains local shadcn-style UI primitives.
-- `apps/frontend/src/lib/utils.ts` provides the local `cn` helper used by UI components.
+- `styles/globals.css` defines Tailwind imports, theme tokens (sage, forest, terracotta, clay, stone), fonts, and base styles.
+- `src/components/ui/*` holds the shadcn-style primitives.
 
 ## Backend LLD
 
@@ -290,368 +198,218 @@ Current configured model in `Interview.tsx`:
 
 `apps/backend/index.ts`
 
-Responsibilities:
-
-- Creates the Express app.
-- Enables JSON request parsing with a `1mb` limit.
-- Adds manual CORS headers.
-- Defines API routes.
-- Defines centralized error handling.
+- JSON body limit of `6mb`, enough for a base64 resume PDF.
+- Manual CORS for `FRONTEND_URL` (default `http://localhost:3000`).
+- Mounts `routes/interviews.ts` at `/api/v1`.
+- Error middleware: `HttpError` becomes its status and message, an oversized body `413`, malformed JSON `400`, and anything else `500`. Axios errors are logged without request headers so API keys never reach the logs.
 - Listens on port `3001`.
 
-### API Endpoints
+### Routes
 
-#### `POST /api/v1/pre-interview`
+`apps/backend/routes/interviews.ts`
 
-Input schema from `apps/backend/types.ts`:
-
-```ts
-{
-  githubUrl: string;
-  resumeText: string;
-}
-```
-
-Processing:
-
-1. Validates request body with `PreInterviewRequestSchema`.
-2. Normalizes a trailing slash off the GitHub URL.
-3. Extracts the final path segment as the GitHub username.
-4. Calls `scrapeGithub(username)`.
-5. Calls `parseResume(resumeText)`.
-6. Calls `generateJobMatchFeedback(resumeData, githubData)`.
-7. Stores an `Interview` row with:
-   - GitHub metadata
-   - parsed resume data
-   - JD feedback
-   - status `pre`
-   - score from JD feedback
-8. Returns the interview ID and computed context.
-
-Error behavior:
-
-- Invalid request body returns `411`.
-- Invalid GitHub URL returns `400`.
-- GitHub 404 returns `404`.
-- Other GitHub/API transport errors return `502`.
-- Malformed JSON returns `400`.
-- Unhandled errors return `500`.
-
-#### `GET /api/v1/gemini/session`
-
-Processing:
-
-1. Calls `createEphemeralToken()`.
-2. Returns `{ token }`.
-
-The token is used by the frontend to connect directly to the Gemini Live WebSocket API.
-
-#### `GET /api/v1/interviews/:id/context`
-
-Processing:
-
-1. Looks up an interview by ID.
-2. Selects:
-   - `id`
-   - `githubMetadata`
-   - `resumeData`
-   - `jdFeedback`
-3. Returns `404` if not found.
-4. Returns the stored context if found.
+- `POST /pre-interview`: validation (`PreInterviewRequestSchema`), PDF checks (size, `%PDF-` signature), parallel GitHub, extraction, and job fit, then creates the interview.
+- `POST /interviews/:id/session`: `404` if unknown, `409` if `Done`. Builds the Live setup, mints the token, moves `pre` to `InProgress` (`startedAt`) atomically with `updateMany`, and returns `nextSeq`.
+- `POST /interviews/:id/messages`: validates up to 500 messages and upserts each by `(interviewId, seq)` in one transaction. `409` once `Done`.
+- `POST /interviews/:id/complete`: marks `Done` (`endedAt`) if needed. If there is no evaluation, scores through an in-memory map so concurrent calls share one run, then returns the report.
 
 ### Request Validation
 
 `apps/backend/types.ts`
 
-- Uses Zod to validate `githubUrl` and `resumeText`.
-- `resumeText` must be non-empty.
-- `githubUrl` is typed as string but is not currently validated as a URL.
+- `jobDescription`: required, trimmed, at most 20,000 characters.
+- `githubUrl`: optional; must parse as a GitHub profile URL or username.
+- Exactly one of `resumeText` (at most 50,000 characters) or `resumePdfBase64`.
+- `SaveMessagesRequestSchema`: `seq` 0-10,000, role `user` or `assistant`, non-empty text.
 
 ### GitHub Scraper
 
 `apps/backend/scrapers/github.ts`
 
-Responsibilities:
+- `parseGithubUsername` accepts profile URLs (with or without scheme or `www`), repository URLs, `@user`, or a bare username, and validates GitHub's username rules.
+- `scrapeGithub` lists owned repositories sorted by last push, drops forks, keeps 20, and maps them to name, full name, description, language, and stars. Sends `GITHUB_TOKEN` when set.
+- `loadGithubRepos`: a `404` becomes `HttpError(404)`. Other failures (rate limit, outage) return no repositories and a warning.
 
-- Calls `https://api.github.com/users/:username/repos`.
-- Uses GitHub JSON API headers and an app-specific user agent.
-- Applies optional proxy support through `httpsAgent`.
-- Maps the GitHub response to a smaller repo metadata structure:
-  - `description`
-  - `name`
-  - `fullName`
-  - `starCount`
+### Gemini Structured Output
 
-### Resume Parser
+`apps/backend/lib/gemini.ts`
 
-`apps/backend/lib/resumeParser.ts`
+- `generateJson({ schema, system, parts })` sends the Zod schema as `responseJsonSchema` (via `z.toJSONSchema`) and validates the reply with the same schema.
+- Models: `GEMINI_TEXT_MODEL` (default `gemini-3.5-flash-lite`), falling back to `GEMINI_TEXT_FALLBACK_MODEL` (default `gemini-3.1-flash-lite`) on 429, 5xx, or connection errors. Timeouts (45 seconds) are not retried.
 
-Responsibilities:
+### Resume Extraction
 
-- Normalizes text line endings and repeated spaces.
-- Extracts:
-  - candidate name
-  - email
-  - phone
-  - education-related lines
-  - work-related lines
-  - known skill keywords
-  - approximate years of experience
-  - raw normalized text
+`apps/backend/agents/resumeExtractor.ts`
 
-The parser is deterministic and regex/keyword based. It does not call an LLM.
+- Sends the PDF as `inlineData` or the text as-is, and asks for name, contacts, education, work entries, projects, skills, and years of experience.
+- On failure: pasted text falls back to `lib/resumeParser.ts` (regex and keywords, including a projects section), and a PDF returns `502` asking the user to retry or paste text.
 
-### JD Feedback Agent
+### Job Fit
 
 `apps/backend/agents/jdFeedbackAgent.ts`
 
-Responsibilities:
+- `assessJobFit`: Gemini compares the job description with the resume and repositories, returning a score, summary, and up to 10 matched and 8 missing requirements.
+- `keywordJobMatch` (fallback): frequency-ranked keywords from the job description, with filler words and sentence punctuation removed, scored on every match.
 
-- Reads `apps/backend/jd.txt`.
-- Extracts up to 40 significant keywords from the job description.
-- Builds candidate signal text from resume skills, work, education, and GitHub repo names/descriptions.
-- Computes a keyword-overlap score.
-- Returns:
-  - `score`
-  - `summary`
-  - `matchedSignals`
-  - `missingSignals`
+### Live Session
 
-Despite the `Agent` name, the current implementation is deterministic keyword matching and does not call an LLM.
+`apps/backend/lib/liveSession.ts`
 
-### Gemini Token Sideband
+- `buildSystemInstruction`: a five-minute plan (greeting by first name, project deep dive with a trade-off, one or two technical questions favoring job-fit gaps, one behavioral question, wrap-up, then `end_interview`), conduct rules, and the candidate context. The context is marked as data, not instructions.
+- `buildLiveSetup`: model (`GEMINI_LIVE_MODEL`), audio-only responses with the `Puck` voice, the prompt, the `end_interview` function declaration, automatic activity detection, and input and output transcription.
 
-`apps/backend/sideband.ts`
+### Interview Context
 
-Responsibilities:
+`apps/backend/lib/interviewContext.ts` reads the JSON columns through lenient Zod schemas. Missing fields on older rows get defaults, and email, phone, and raw resume text are dropped before anything reaches a prompt. It also formats the job description, candidate, and job fit for prompts.
 
-- Calls `https://generativelanguage.googleapis.com/v1alpha/auth_tokens`.
-- Uses `GEMINI_API_KEY` from environment variables.
-- Creates a single-use token.
-- Sets token expiration to 30 minutes.
-- Sets new session expiration to 60 seconds.
-- Applies optional proxy support through `httpsAgent`.
+### Scoring
+
+`apps/backend/agents/interviewEvaluator.ts`
+
+- Rubric from Gemini: relevance, clarity, depth, and role fit (each 1-10 with a comment), a summary, strengths, improvements, and per-question feedback.
+- `overallScore` is the mean of the four dimensions times 10, computed in code so it always matches them.
+- Fewer than 15 words from the candidate returns a fixed "no answers" evaluation without calling the model.
+
+### Ephemeral Tokens
+
+`apps/backend/sideband.ts` calls `v1alpha/auth_tokens` with `uses: 1`, a 30-minute expiry, a 60-second window to start the session, and `bidiGenerateContentSetup` set to the interview's full setup. Without a field mask, every field in that setup is locked.
 
 ### Proxy Configuration
 
-`apps/backend/proxy.ts`
-
-- If `PROXY_URL` exists, exports an `HttpsProxyAgent`.
-- If not, exports `undefined`.
-- GitHub and Gemini token calls both pass this agent and disable Axios proxy auto-detection with `proxy: false`.
+`apps/backend/proxy.ts` exports an `HttpsProxyAgent` when `PROXY_URL` is set. Every outbound axios call passes it and disables axios's own proxy detection (`proxy: false`).
 
 ## Database Design
 
-### Prisma Schema
-
 `apps/backend/prisma/schema.prisma`
 
-#### `Interview`
+### `Interview`
 
-Fields:
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUID | primary key |
+| `jobDescription` | text | from the form |
+| `githubMetadata` | JSON | repositories (may be empty) |
+| `resumeData` | JSON | extracted resume, including contacts and raw text for pasted resumes |
+| `jdFeedback` | JSON? | job fit from the resume screen |
+| `evaluation` | JSON? | the scored report |
+| `status` | enum | `pre` → `InProgress` → `Done` |
+| `score` | int? | interview score 0-100, set when scored |
+| `createdAt`, `updatedAt` | timestamp | |
+| `startedAt`, `endedAt` | timestamp? | set by the session and complete endpoints |
 
-- `id`: UUID primary key
-- `githubMetadata`: JSON
-- `resumeData`: JSON
-- `jdFeedback`: nullable JSON
-- `status`: `InterviewStatus`
-- `score`: integer, default `0`
-- `conversations`: relation to `Message[]`
+### `Message`
 
-#### `Message`
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUID | primary key |
+| `seq` | int | position in the transcript; unique with `interviewId` |
+| `message` | text | transcribed speech |
+| `type` | enum | `User` or `Assistant` |
+| `createdAt` | timestamp | |
+| `interviewId` | FK | `ON DELETE CASCADE` |
 
-Fields:
+The `(interviewId, seq)` unique index gives ordering, idempotent saves, and an index on the foreign key.
 
-- `id`: UUID primary key
-- `message`: text
-- `type`: `MessageType`
-- `interviewId`: foreign key to `Interview`
-- `interview`: Prisma relation
+### Migrations
 
-#### Enums
-
-`MessageType`:
-
-- `User`
-- `Assistant`
-
-`InterviewStatus`:
-
-- `pre`
-- `InProgress`
-- `Done`
-
-### Current Persistence Behavior
-
-Currently persisted:
-
-- Interview GitHub metadata
-- Parsed resume data
-- JD feedback
-- Initial status
-- Initial score
-
-Schema-supported but not currently persisted by API routes:
-
-- Live conversation messages
-- Interview status transitions from `pre` to `InProgress` or `Done`
-- Final interview result/evaluation beyond initial JD-fit score
-
-## Data Flow Details
-
-### Pre-Interview Data Flow
-
-```text
-Form.tsx
-  -> POST /api/v1/pre-interview
-    -> PreInterviewRequestSchema
-    -> scrapeGithub()
-      -> GitHub API
-    -> parseResume()
-    -> generateJobMatchFeedback()
-      -> jd.txt
-    -> prisma.interview.create()
-      -> PostgreSQL
-  <- interviewId + githubData + resumeData + jdFeedback
-  -> navigate("/interview/:interviewId")
-```
-
-### Live Interview Data Flow
-
-```text
-Interview.tsx
-  -> GET /api/v1/gemini/session
-    -> createEphemeralToken()
-      -> Gemini auth token API
-
-Interview.tsx
-  -> GET /api/v1/interviews/:id/context
-    -> prisma.interview.findUnique()
-
-Interview.tsx
-  -> buildSystemInstruction(context)
-  -> GeminiLiveAPI.connect()
-    -> Gemini Live WebSocket
-
-AudioStreamer
-  -> microphone
-  -> AudioWorklet
-  -> Float32 samples
-  -> PCM16
-  -> base64
-  -> Gemini realtimeInput.audio
-
-Gemini Live API
-  -> base64 PCM audio
-  -> AudioPlayer
-  -> AudioWorklet queue
-  -> speakers
-
-Gemini Live API
-  -> input/output transcription events
-  -> React transcript state
-  -> chat bubbles
-```
+1. `20260713131418_init`: interviews and messages.
+2. `20260718120000_add_resume_data`: `resumeData` and `jdFeedback`.
+3. `20260929120000_add_job_description`: `jobDescription` (existing rows backfilled with an empty string); drops a stray `resumeData` default.
+4. `20260929130000_interview_lifecycle`: timestamps, `evaluation`, nullable `score` (old values, which were resume-screen scores, cleared), and `Message.seq` with its unique index and cascade.
 
 ## API Contracts
 
-### `POST /api/v1/pre-interview`
+All routes are under `/api/v1`. Errors are `{ "message": string }`.
 
-Request:
-
-```json
-{
-  "githubUrl": "https://github.com/example-user",
-  "resumeText": "Plain text resume content"
-}
-```
-
-Success response:
+### `POST /pre-interview`
 
 ```json
 {
-  "interviewId": "uuid",
-  "githubData": [],
-  "resumeData": {},
-  "jdFeedback": {
-    "score": 0,
-    "summary": "",
-    "matchedSignals": [],
-    "missingSignals": []
-  }
+  "jobDescription": "Senior Frontend Engineer ...",
+  "githubUrl": "https://github.com/octocat",
+  "resumePdfBase64": "JVBERi0xLjQK..."
 }
 ```
 
-Main error responses:
-
-- `411`: invalid request body
-- `400`: GitHub username could not be extracted
-- `404`: GitHub user not found
-- `502`: GitHub API or network/proxy failure
-- `500`: unexpected backend failure
-
-### `GET /api/v1/gemini/session`
-
-Returns a single-use Gemini Live ephemeral token:
+Send `resumeText` instead of `resumePdfBase64` for a pasted resume. Response:
 
 ```json
-{
-  "token": "ephemeral-token-name"
-}
+{ "interviewId": "uuid", "warnings": [] }
 ```
 
-### `GET /api/v1/interviews/:id/context`
+Errors: `400` validation or not a PDF, `404` GitHub user not found, `413` file too large, `502` PDF could not be read.
 
-Returns stored pre-interview context:
+### `POST /interviews/:id/session`
+
+```json
+{ "token": "auth_tokens/...", "model": "models/gemini-3.1-flash-live-preview", "durationSeconds": 300, "nextSeq": 0 }
+```
+
+Errors: `404` unknown interview, `409` already finished, `502` token minting failed.
+
+### `POST /interviews/:id/messages`
+
+```json
+{ "messages": [{ "seq": 0, "role": "assistant", "text": "Hi Priya, ..." }] }
+```
+
+Response: `204`. Errors: `400`, `404`, `409` already finished.
+
+### `POST /interviews/:id/complete`
 
 ```json
 {
   "id": "uuid",
-  "githubMetadata": {},
-  "resumeData": {},
-  "jdFeedback": {}
+  "status": "Done",
+  "score": 70,
+  "evaluation": {
+    "overallScore": 70,
+    "summary": "...",
+    "dimensions": {
+      "relevance": { "score": 6, "comment": "..." },
+      "clarity": { "score": 8, "comment": "..." },
+      "depth": { "score": 7, "comment": "..." },
+      "roleFit": { "score": 7, "comment": "..." }
+    },
+    "strengths": ["..."],
+    "improvements": ["..."],
+    "questions": [{ "question": "...", "feedback": "...", "score": 9 }]
+  },
+  "jobFit": { "score": 60, "summary": "...", "matchedSignals": ["..."], "missingSignals": ["..."] },
+  "startedAt": "2026-09-29T07:30:00.000Z",
+  "endedAt": "2026-09-29T07:35:00.000Z",
+  "messages": [{ "seq": 0, "role": "assistant", "text": "..." }]
 }
 ```
 
-Returns `404` if the interview ID is not found.
+Errors: `404`, `502` scoring failed (the interview stays `Done` and can be retried).
 
 ## Configuration
 
-### Required Environment Variables
+Backend (`apps/backend/.env`; see `.env.example`): `DATABASE_URL` and `GEMINI_API_KEY` (required), `FRONTEND_URL`, `GITHUB_TOKEN`, `PROXY_URL`, `GEMINI_LIVE_MODEL`, `GEMINI_TEXT_MODEL`, and `GEMINI_TEXT_FALLBACK_MODEL`.
 
-Backend:
+Frontend (`apps/frontend/.env`): `BUN_PUBLIC_BACKEND_URL` (default `http://localhost:3001`), inlined at build time. `config.ts` guards the read because an unset `BUN_PUBLIC_*` variable is left as a `process.env` expression, and `process` doesn't exist in browsers.
 
-- `DATABASE_URL`: PostgreSQL connection string for Prisma.
-- `GEMINI_API_KEY`: Google Generative Language API key used to mint ephemeral Gemini Live tokens.
+### Runtime Ports
 
-Optional backend variables:
-
-- `FRONTEND_URL`: allowed CORS origin. Defaults to `http://localhost:3000`.
-- `PROXY_URL`: HTTPS proxy URL for GitHub and Gemini token calls.
-
-Frontend:
-
-- `BACKEND_URL` is currently a source constant in `apps/frontend/src/config.ts`, not an environment variable.
-
-## Runtime Ports
-
-- Backend Express API: `http://localhost:3001`
-- Frontend Bun server: Bun chooses and logs `server.url`; the backend CORS default expects `http://localhost:3000` unless `FRONTEND_URL` is set.
+- Backend API: `http://localhost:3001`
+- Frontend dev server: `http://localhost:3000`
 
 ## Design Notes and Gaps
 
-- The repo is still partially based on a Turborepo starter. The root README and shared `packages/ui` package do not fully describe the actual app.
-- The frontend talks directly to Gemini Live using a server-minted ephemeral token. This keeps the long-lived API key on the backend while avoiding proxying the live audio stream through Express.
-- The backend stores pre-interview context but does not yet store the live interview transcript.
-- `Message` and `InterviewStatus` indicate an intended future lifecycle, but no route currently writes messages or updates interview status.
-- The `Result` page is a placeholder and is not connected to persisted interview results.
-- Resume parsing and JD-fit feedback are deterministic heuristics. They are fast and simple, but less robust than structured document parsing or LLM-based extraction.
-- `githubUrl` is only checked as a string and parsed by final path segment. It should be hardened if arbitrary GitHub URL formats are expected.
+- **No authentication.** Anyone who knows an interview ID can save messages to it, complete it, and read its report.
+- **The transcript comes from the browser.** It is speech recognition output and the client could alter it. That is acceptable for self-practice, not for real hiring.
+- **Scoring deduplication is in memory.** With several API instances, two could score the same interview. The result is still correct, just a wasted call.
+- **Reconnects start a fresh Live session.** After a refresh the interviewer greets again and the clock restarts. The transcript continues numbering, so nothing is overwritten.
+- **The model does not always call `end_interview`.** The client also ends after the wrap-up turn once time is up, and on a 30-second backstop.
+- **Browser support.** Capture uses a 16 kHz `AudioContext`, which Firefox can't connect to a microphone stream. Use Chrome or Edge.
+- **Preview models.** Live models are previews and change. Every model name is configurable.
+- `packages/*` is unused scaffolding.
 
 ## Security and Privacy Notes
 
-- Resume text-derived data, GitHub metadata, and JD feedback are stored in PostgreSQL.
-- The live Gemini system instruction includes private candidate context from the stored interview record.
-- The backend keeps `GEMINI_API_KEY` server-side and only returns short-lived ephemeral tokens to the browser.
-- There is no authentication or ownership check yet. Any client that knows an interview ID can call the context endpoint.
-- CORS is manually restricted to `FRONTEND_URL` or the default local frontend origin.
+- `GEMINI_API_KEY` never leaves the server. Browsers receive single-use tokens whose session config (model, prompt, tools) is locked, so a token can't be repurposed.
+- Prompts include the candidate's name, work history, skills, and projects, but not email, phone, or raw resume text. Candidate-supplied text is marked as data in every prompt.
+- Resume data (including contacts for pasted resumes), GitHub metadata, transcripts, and evaluations are stored in PostgreSQL. Deleting an interview deletes its messages.
+- Outbound call failures are logged as status and message only, never with request headers.
+- CORS is restricted to `FRONTEND_URL`.

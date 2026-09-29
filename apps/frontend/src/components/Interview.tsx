@@ -12,6 +12,7 @@ interface ChatMessage {
 
 interface InterviewContext {
     id: string;
+    jobDescription: string;
     githubMetadata: unknown;
     resumeData: unknown;
     jdFeedback: unknown;
@@ -32,6 +33,9 @@ Rules:
 - Ask one question at a time.
 - Use the resume, GitHub data, and JD feedback below as private context.
 - Evaluate the candidate internally based on relevance, clarity, depth, and role fit.
+
+Job description:
+${context.jobDescription || "Not provided."}
 
 Resume data:
 ${compactJson(context.resumeData)}

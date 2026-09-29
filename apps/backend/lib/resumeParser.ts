@@ -1,23 +1,32 @@
+// Deterministic resume parser. agents/resumeExtractor.ts uses an LLM first and
+// falls back to this when that call fails.
+
 export interface ResumeData {
     name: string | null;
     email: string | null;
     phone: string | null;
     college: string[];
     work: string[];
+    projects: string[];
     skills: string[];
     experienceYears: number | null;
+    /** Normalized pasted text; empty when the resume was uploaded as a PDF. */
     rawText: string;
 }
 
 const SECTION_HEADERS = [
+    "summary",
     "education",
     "experience",
     "work experience",
     "professional experience",
     "employment",
     "skills",
+    "technical skills",
     "projects",
     "certifications",
+    "achievements",
+    "awards",
 ];
 
 const SKILL_KEYWORDS = [
@@ -43,8 +52,25 @@ const SKILL_KEYWORDS = [
     "algorithms",
 ];
 
-function normalizeText(text: string) {
+export function normalizeText(text: string) {
     return text.replace(/\r/g, "").replace(/[ \t]+/g, " ").trim();
+}
+
+function isSectionHeader(line: string) {
+    return SECTION_HEADERS.includes(line.toLowerCase().replace(/:$/, ""));
+}
+
+/** Lines between `header` and the next section header. */
+function sectionLines(lines: string[], header: string) {
+    const start = lines.findIndex((line) => line.toLowerCase().replace(/:$/, "") === header);
+    if (start === -1) return [];
+
+    const end = lines.findIndex((line, index) => index > start && isSectionHeader(line));
+    return lines
+        .slice(start + 1, end === -1 ? undefined : end)
+        .map((line) => line.replace(/^[-*•]\s*/, "").trim())
+        .filter(Boolean)
+        .slice(0, 8);
 }
 
 function firstMatch(text: string, pattern: RegExp) {
@@ -63,7 +89,7 @@ function extractName(lines: string[]) {
     const candidate = lines.find((line) => {
         if (line.length > 60) return false;
         if (/@|\d|https?:|github|linkedin/i.test(line)) return false;
-        if (SECTION_HEADERS.some((header) => header.toLowerCase() === line.toLowerCase())) return false;
+        if (isSectionHeader(line)) return false;
         return /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}$/.test(line);
     });
 
@@ -99,6 +125,7 @@ export function parseResume(resumeText: string): ResumeData {
         phone: firstMatch(rawText, /(\+?\d[\d\s().-]{8,}\d)/),
         college: linesMatching(lines, /\b(university|college|institute|school|b\.?tech|m\.?tech|bachelor|master|degree)\b/i),
         work: linesMatching(lines, /\b(engineer|developer|intern|manager|consultant|analyst|architect|lead|company|technologies|solutions|labs)\b/i),
+        projects: sectionLines(lines, "projects"),
         skills,
         experienceYears: extractExperienceYears(rawText),
         rawText,

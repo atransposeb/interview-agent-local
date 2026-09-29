@@ -9,6 +9,7 @@ datasource db {
 
 model Interview {
   id             String            @id @default(uuid())
+  jobDescription String
   githubMetadata Json
   resumeData     Json
   jdFeedback     Json?

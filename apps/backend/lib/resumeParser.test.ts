@@ -46,6 +46,15 @@ describe("parseResume", () => {
         expect(parseResume("Engineer with 4+ years of experience").experienceYears).toBe(4);
     });
 
+    test("collects the projects section up to the next heading", () => {
+        const resume = parseResume(`Projects:
+- Interview coach: mock interviews with Gemini Live
+- Budget CLI in Go
+Skills
+Go`);
+        expect(resume.projects).toEqual(["Interview coach: mock interviews with Gemini Live", "Budget CLI in Go"]);
+    });
+
     test("normalizes whitespace and line endings", () => {
         expect(parseResume("Jane   Doe\r\nEngineer").rawText).toBe("Jane Doe\nEngineer");
     });

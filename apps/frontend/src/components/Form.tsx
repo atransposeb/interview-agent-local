@@ -90,7 +90,7 @@ export function Form() {
           backgroundRepeat: "repeat",
         }}
       />
-      <div className="min-h-screen w-screen flex justify-center items-center px-6 py-12">
+      <div className="min-h-screen w-full flex justify-center items-center px-6 py-12">
         <div className="w-full max-w-lg mx-auto flex flex-col items-center text-center gap-10">
           <div className="space-y-3">
             <h1 className="font-heading text-5xl md:text-6xl font-semibold text-foreground leading-tight">
@@ -98,7 +98,7 @@ export function Form() {
               <span className="italic">the</span>role
             </h1>
             <p className="text-muted-foreground text-base leading-relaxed max-w-xs mx-auto">
-              Practice interviewing with AI. Get real-time feedback. Land your next role.
+              Practice a live voice interview with AI. Get a scored feedback report. Land your next role.
             </p>
           </div>
 

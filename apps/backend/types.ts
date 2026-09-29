@@ -21,3 +21,16 @@ export const PreInterviewRequestSchema = z
     .refine((body) => Boolean(body.resumeText) !== Boolean(body.resumePdfBase64), "Provide your resume as a PDF or as pasted text");
 
 export type PreInterviewRequest = z.infer<typeof PreInterviewRequestSchema>;
+
+export const SaveMessagesRequestSchema = z.object({
+    messages: z
+        .array(
+            z.object({
+                seq: z.int().min(0).max(10_000),
+                role: z.enum(["user", "assistant"]),
+                text: z.string().trim().min(1).max(10_000),
+            }),
+        )
+        .min(1)
+        .max(500),
+});

@@ -47,6 +47,36 @@ const EMPTY_PROFILE: CandidateProfile = {
     college: [],
 };
 
+const MAX_JOB_DESCRIPTION_CHARS = 8_000;
+
+function bulletList(items: string[]) {
+    return items.length ? items.map((item) => `- ${item}`).join("\n") : "- None listed";
+}
+
+export function formatJobDescription(jobDescription: string) {
+    return jobDescription.slice(0, MAX_JOB_DESCRIPTION_CHARS) || "Not provided. Treat it as a general software engineering interview.";
+}
+
+export function formatCandidate(candidate: CandidateProfile) {
+    return [
+        `Name: ${candidate.name ?? "Not given"}`,
+        `Experience: ${candidate.experienceYears === null ? "Unknown" : `about ${candidate.experienceYears} years`}`,
+        `Skills: ${candidate.skills.length ? candidate.skills.join(", ") : "None listed"}`,
+        `Work history:\n${bulletList(candidate.work)}`,
+        `Projects:\n${bulletList(candidate.projects)}`,
+        `Education:\n${bulletList(candidate.college)}`,
+    ].join("\n");
+}
+
+export function formatJobFit(jobFit: JobFit | null) {
+    if (!jobFit) return "Not available.";
+    return [
+        `Summary: ${jobFit.summary}`,
+        `Evidence of fit: ${jobFit.matchedSignals.join(", ") || "none found"}`,
+        `Gaps to probe: ${jobFit.missingSignals.join(", ") || "none found"}`,
+    ].join("\n");
+}
+
 export function readInterviewContext(interview: {
     jobDescription: string;
     resumeData: unknown;

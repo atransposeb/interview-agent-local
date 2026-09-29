@@ -14,6 +14,9 @@ const result = await Bun.build({
   minify: true,
   target: "browser",
   sourcemap: "linked",
+  // Absolute asset URLs: with relative ones, a deep link like /result/:id
+  // requests /result/chunk.js and gets index.html back.
+  publicPath: "/",
   env: "BUN_PUBLIC_*",
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),

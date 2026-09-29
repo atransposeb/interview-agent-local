@@ -47,8 +47,62 @@ export interface LiveSession {
     token: string;
     model: string;
     durationSeconds: number;
+    /** Where this session's transcript numbering starts (non-zero after a reconnect). */
+    nextSeq: number;
 }
 
 export function createSession(interviewId: string) {
     return postJson<LiveSession>(`/api/v1/interviews/${interviewId}/session`, {});
+}
+
+export interface TranscriptMessage {
+    seq: number;
+    role: "user" | "assistant";
+    text: string;
+}
+
+export function saveMessages(interviewId: string, messages: TranscriptMessage[]) {
+    return postJson<null>(`/api/v1/interviews/${interviewId}/messages`, { messages });
+}
+
+export interface DimensionScore {
+    score: number;
+    comment: string;
+}
+
+export interface InterviewEvaluation {
+    overallScore: number;
+    summary: string;
+    dimensions: {
+        relevance: DimensionScore;
+        clarity: DimensionScore;
+        depth: DimensionScore;
+        roleFit: DimensionScore;
+    };
+    strengths: string[];
+    improvements: string[];
+    questions: { question: string; feedback: string; score: number }[];
+}
+
+export interface JobFit {
+    score: number;
+    summary: string;
+    matchedSignals: string[];
+    missingSignals: string[];
+}
+
+export interface InterviewResult {
+    id: string;
+    status: "pre" | "InProgress" | "Done";
+    score: number | null;
+    evaluation: InterviewEvaluation | null;
+    jobFit: JobFit | null;
+    startedAt: string | null;
+    endedAt: string | null;
+    messages: TranscriptMessage[];
+}
+
+/** Ends the interview if needed and returns the scored report. Safe to call repeatedly. */
+export function completeInterview(interviewId: string) {
+    return postJson<InterviewResult>(`/api/v1/interviews/${interviewId}/complete`, {});
 }

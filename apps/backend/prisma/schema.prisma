@@ -13,17 +13,29 @@ model Interview {
   githubMetadata Json
   resumeData     Json
   jdFeedback     Json?
+  evaluation     Json?
   status         InterviewStatus
-  score          Int               @default(0)
+  /// Interview performance, 0-100, set when the evaluation is generated.
+  /// The resume-screen match score lives in jdFeedback.
+  score          Int?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  startedAt      DateTime?
+  endedAt        DateTime?
   conversations  Message[]
 }
 
 model Message {
   id            String        @id @default(uuid())
+  /// Position in the transcript. Unique per interview, so saving a turn twice is harmless.
+  seq           Int
   message       String
   type          MessageType
+  createdAt     DateTime      @default(now())
   interviewId   String
-  interview     Interview     @relation(fields: [interviewId], references: [id])
+  interview     Interview     @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+
+  @@unique([interviewId, seq])
 }
 
 enum MessageType {

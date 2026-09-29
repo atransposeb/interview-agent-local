@@ -1,5 +1,6 @@
 import "@/../styles/globals.css";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -13,25 +14,26 @@ export function Form() {
 
 
   const [githubUrl, setGithubUrl] = useState("");
+  const [resumeText, setResumeText] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function onSubmit() {
-    setLoading(true);
-    console.log("Clicked");
-    console.log({
-      githubUrl,
-    });
     if (!githubUrl) {
-      toast("Please enter both LinkedIn and GitHub URLs");
+      toast("Please enter a GitHub profile URL");
       return;
     }
-    console.log("Sending request...");
-    const response = await axios.post(`${BACKEND_URL}/api/v1/pre-interview`, {
-
-      githubUrl,
-    });
-    navigate(`/interview/${response.data.id}`);
-    console.log("Done");
+    if (!resumeText.trim()) {
+      toast("Please paste your resume text");
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await axios.post(`${BACKEND_URL}/api/v1/pre-interview`, { githubUrl, resumeText });
+      navigate(`/interview/${response.data.interviewId}`);
+    } catch {
+      toast("Could not prepare the interview. Please try again.");
+      setLoading(false);
+    }
   }
   return (
     <>
@@ -59,13 +61,16 @@ export function Form() {
             <Input
               placeholder="GitHub profile URL"
               value={githubUrl}
-              onChange={(e) => {
-                console.log(e.target.value);
-                setGithubUrl(e.target.value);
-              }}
+              onChange={(e) => setGithubUrl(e.target.value)}
               className="h-12 rounded-full border border-stone bg-white/70 px-5 text-foreground placeholder:text-muted-foreground/60 shadow-sm backdrop-blur-sm focus-visible:border-sage focus-visible:ring-sage/20"
             />
 
+            <Textarea
+              placeholder="Paste resume text"
+              value={resumeText}
+              onChange={(e) => setResumeText(e.target.value)}
+              className="min-h-40 rounded-2xl border border-stone bg-white/70 px-5 py-4 text-foreground placeholder:text-muted-foreground/60 shadow-sm backdrop-blur-sm focus-visible:border-sage focus-visible:ring-sage/20"
+            />
 
           </div>
 

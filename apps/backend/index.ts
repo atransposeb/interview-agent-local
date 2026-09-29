@@ -1,7 +1,12 @@
 import axios from "axios";
 import express from "express";
+import { createEphemeralToken } from "./sideband";
 import { PreInterviewRequestSchema } from "./types";
 import { scrapeGithub } from "./scrapers/github";
+import { parseResume } from "./lib/resumeParser";
+import { generateJobMatchFeedback } from "./agents/jdFeedbackAgent";
+import { prisma } from "./prisma/db";
+import type { Prisma } from "./generated/prisma/client";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -32,8 +37,25 @@ app.post("/api/v1/pre-interview", async (req, res, next) => {
 
     try {
         const githubData = await scrapeGithub(githubUsername);
+        const resumeData = parseResume(data.resumeText);
+        const jdFeedback = await generateJobMatchFeedback(resumeData, githubData);
 
-        return res.status(200).json({ githubData });
+        const interview = await prisma.interview.create({
+            data: {
+                githubMetadata: githubData,
+                resumeData: resumeData as unknown as Prisma.InputJsonValue,
+                jdFeedback: jdFeedback as unknown as Prisma.InputJsonValue,
+                status: "pre",
+                score: jdFeedback.score,
+            },
+        });
+
+        return res.status(200).json({
+            interviewId: interview.id,
+            githubData,
+            resumeData,
+            jdFeedback,
+        });
     } catch (error) {
         if (axios.isAxiosError(error)) {
             const status = error.response?.status;
@@ -45,6 +67,38 @@ app.post("/api/v1/pre-interview", async (req, res, next) => {
             return res.status(responseStatus).json({ message });
         }
 
+        next(error);
+    }
+});
+
+app.get("/api/v1/gemini/session", async (_req, res) => {
+    try {
+        const token = await createEphemeralToken();
+        res.json({ token });
+    } catch (error) {
+        console.error("Failed to create Gemini session:", error);
+        res.status(500).json({ message: "Failed to create Gemini session" });
+    }
+});
+
+app.get("/api/v1/interviews/:id/context", async (req, res, next) => {
+    try {
+        const interview = await prisma.interview.findUnique({
+            where: { id: req.params.id },
+            select: {
+                id: true,
+                githubMetadata: true,
+                resumeData: true,
+                jdFeedback: true,
+            },
+        });
+
+        if (!interview) {
+            return res.status(404).json({ message: "Interview not found" });
+        }
+
+        return res.status(200).json(interview);
+    } catch (error) {
         next(error);
     }
 });

@@ -10,6 +10,8 @@ datasource db {
 model Interview {
   id             String            @id @default(uuid())
   githubMetadata Json
+  resumeData     Json
+  jdFeedback     Json?
   status         InterviewStatus
   score          Int               @default(0)
   conversations  Message[]

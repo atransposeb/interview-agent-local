@@ -42,3 +42,13 @@ export interface PreInterviewInput {
 export function createInterview(input: PreInterviewInput) {
     return postJson<{ interviewId: string; warnings: string[] }>("/api/v1/pre-interview", input);
 }
+
+export interface LiveSession {
+    token: string;
+    model: string;
+    durationSeconds: number;
+}
+
+export function createSession(interviewId: string) {
+    return postJson<LiveSession>(`/api/v1/interviews/${interviewId}/session`, {});
+}

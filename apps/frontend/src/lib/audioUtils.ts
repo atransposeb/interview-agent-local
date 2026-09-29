@@ -192,6 +192,8 @@ export class AudioPlayer {
     private sampleRate = 24000;
     private initialized = false;
     private initPromise: Promise<void> | null = null;
+    // AudioContext time at which the queued audio finishes playing.
+    private queuedUntil = 0;
 
     async init(): Promise<void> {
         if (this.initialized) return;
@@ -241,11 +243,23 @@ export class AudioPlayer {
         }
 
         this.workletNode!.port.postMessage(float32);
+        const now = this.audioContext!.currentTime;
+        this.queuedUntil = Math.max(this.queuedUntil, now) + float32.length / this.sampleRate;
     }
 
     interrupt() {
         if (this.workletNode) {
             this.workletNode.port.postMessage("interrupt");
+        }
+        this.queuedUntil = 0;
+    }
+
+    /** Resolves when queued audio has finished playing, or after `maxMs`. */
+    async drain(maxMs = 10_000): Promise<void> {
+        if (!this.audioContext) return;
+        const remainingMs = (this.queuedUntil - this.audioContext.currentTime) * 1000;
+        if (remainingMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, Math.min(remainingMs, maxMs)));
         }
     }
 

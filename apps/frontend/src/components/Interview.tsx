@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { GeminiLiveAPI } from "@/lib/geminiLive";
+import { GeminiLiveAPI, type FunctionCall } from "@/lib/geminiLive";
 import { AudioStreamer, AudioPlayer } from "@/lib/audioUtils";
-import { BACKEND_URL } from "@/config";
+import { ApiError, createSession } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 
 interface ChatMessage {
@@ -10,42 +10,12 @@ interface ChatMessage {
     text: string;
 }
 
-interface InterviewContext {
-    id: string;
-    jobDescription: string;
-    githubMetadata: unknown;
-    resumeData: unknown;
-    jdFeedback: unknown;
-}
-
-function compactJson(value: unknown) {
-    return JSON.stringify(value, null, 2);
-}
-
-function buildSystemInstruction(context: InterviewContext) {
-    return `You are an interviewer who is supposed to ask questions and evaluate the candidate's answers.
-
-Rules:
-- Ask interview questions only.
-- Do not answer questions from the candidate.
-- Do not provide feedback to the candidate during the interview.
-- Keep questions concise and conversational.
-- Ask one question at a time.
-- Use the resume, GitHub data, and JD feedback below as private context.
-- Evaluate the candidate internally based on relevance, clarity, depth, and role fit.
-
-Job description:
-${context.jobDescription || "Not provided."}
-
-Resume data:
-${compactJson(context.resumeData)}
-
-GitHub data:
-${compactJson(context.githubMetadata)}
-
-JD feedback:
-${compactJson(context.jdFeedback)}`;
-}
+// The prompt and the end_interview tool are locked into the session token by
+// the backend; the browser only starts the conversation.
+const KICKOFF_TEXT = "Hello, I'm ready to begin the interview.";
+const END_INTERVIEW_TOOL = "end_interview";
+// After end_interview the model usually speaks its goodbye in one more turn.
+const GOODBYE_TIMEOUT_MS = 8_000;
 
 export function Interview() {
     const navigate = useNavigate();
@@ -58,6 +28,8 @@ export function Interview() {
     const clientRef = useRef<GeminiLiveAPI | null>(null);
     const audioStreamerRef = useRef<AudioStreamer | null>(null);
     const audioPlayerRef = useRef<AudioPlayer | null>(null);
+    const endRequestedRef = useRef(false);
+    const endedRef = useRef(false);
 
     // Live copies of text being streamed in, so we can append transcript
     // chunks onto the same bubble instead of creating a new one per chunk.
@@ -73,6 +45,30 @@ export function Interview() {
         setMicActive(false);
     }
 
+    // Let the interviewer's last words finish playing before hanging up.
+    async function endSession() {
+        if (endedRef.current) return;
+        endedRef.current = true;
+        stopMicStream();
+        await audioPlayerRef.current?.drain();
+        clientRef.current?.disconnect();
+        setConnected(false);
+        setStatus("Interview complete");
+    }
+
+    function handleToolCall(client: GeminiLiveAPI, calls: FunctionCall[]) {
+        const endCalls = calls.filter((call) => call.name === END_INTERVIEW_TOOL);
+        const otherCalls = calls.filter((call) => call.name !== END_INTERVIEW_TOOL);
+        if (otherCalls.length) {
+            client.sendToolResponse(otherCalls, { error: "Unknown tool" });
+        }
+        if (endCalls.length && !endRequestedRef.current) {
+            client.sendToolResponse(endCalls, { result: "ok" });
+            endRequestedRef.current = true;
+            setTimeout(endSession, GOODBYE_TIMEOUT_MS);
+        }
+    }
+
     useEffect(() => {
         let cancelled = false;
 
@@ -83,39 +79,11 @@ export function Interview() {
                     return;
                 }
 
-                const [sessionRes, contextRes] = await Promise.all([
-                    fetch(`${BACKEND_URL}/api/v1/gemini/session`),
-                    fetch(`${BACKEND_URL}/api/v1/interviews/${interviewId}/context`),
-                ]);
-
-                if (!sessionRes.ok) throw new Error(`Session request failed: ${sessionRes.status}`);
-                if (!contextRes.ok) throw new Error(`Interview context request failed: ${contextRes.status}`);
-
-                const { token } = await sessionRes.json();
-                const context: InterviewContext = await contextRes.json();
+                const session = await createSession(interviewId);
 
                 if (cancelled) return;
 
-                const client = new GeminiLiveAPI({
-                    token,
-                    model: "gemini-3.1-flash-live-preview",
-                    systemInstruction: buildSystemInstruction(context),
-                    // Native-audio Live models only support a single response
-                    // modality. Requesting AUDIO + TEXT together closes the
-                    // socket with a 1007 error, so text has to come from the
-                    // output transcription channel instead.
-                    responseModalities: ["AUDIO"],
-                    outputAudioTranscription: {},
-                    inputAudioTranscription: {},
-                    voiceName: "Puck",
-                    // gemini-3.1-flash-live-preview restricts send_client_content
-                    // to seeding initial history — it must be explicitly enabled
-                    // via history_config, or the opening greeting call below can
-                    // be silently ignored.
-                    historyConfig: {
-                        initialHistoryInClientContent: true,
-                    },
-                });
+                const client = new GeminiLiveAPI({ token: session.token, model: session.model });
 
                 const player = new AudioPlayer();
                 await player.init();
@@ -129,12 +97,7 @@ export function Interview() {
                 client.onOpen = () => {
                     setConnected(true);
                     setStatus("Connected");
-                    // First turn only: allowed via send_client_content because
-                    // historyConfig.initialHistoryInClientContent is set above.
-                    // Any later text should go through the wrapper's
-                    // send_realtime_input path (e.g. client.sendRealtimeText),
-                    // not sendTextMessage.
-                    client.sendTextMessage("Start the interview with your first role-relevant question.");
+                    client.sendRealtimeText(KICKOFF_TEXT);
                 };
 
                 client.onReceiveResponse = (message) => {
@@ -187,11 +150,16 @@ export function Interview() {
                             player.interrupt();
                             break;
 
+                        case "TOOL_CALL":
+                            handleToolCall(client, message.data);
+                            break;
+
                         case "TURN_COMPLETE":
                             // A turn finished — the next transcript chunk
                             // (either role) should start a fresh bubble.
                             partialGeminiRef.current = "";
                             partialUserRef.current = "";
+                            if (endRequestedRef.current) endSession();
                             break;
 
                         case "SETUP_COMPLETE":
@@ -201,7 +169,7 @@ export function Interview() {
 
                 client.onClose = () => {
                     setConnected(false);
-                    setStatus("Disconnected");
+                    if (!endedRef.current) setStatus("Disconnected");
                     stopMicStream();
                 };
 
@@ -216,9 +184,12 @@ export function Interview() {
                 clientRef.current = client;
                 audioPlayerRef.current = player;
             } catch (err) {
-                if (!cancelled) {
-                    setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+                if (cancelled) return;
+                if (err instanceof ApiError && err.status === 409) {
+                    setStatus("This interview has already finished");
+                    return;
                 }
+                setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
             }
         }
 

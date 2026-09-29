@@ -1,5 +1,11 @@
 type ResponseType = "TEXT" | "AUDIO" | "SETUP_COMPLETE" | "TURN_COMPLETE" | "INTERRUPTED" | "TOOL_CALL" | "INPUT_TRANSCRIPTION" | "OUTPUT_TRANSCRIPTION";
 
+export interface FunctionCall {
+    id: string;
+    name: string;
+    args?: Record<string, unknown>;
+}
+
 interface GeminiResponse {
     type: ResponseType;
     data: any;
@@ -8,28 +14,18 @@ interface GeminiResponse {
 
 interface GeminiLiveAPIOptions {
     token: string;
-    model?: string;
-    systemInstruction?: string;
-    voiceName?: string;
-    responseModalities?: string[];
-    temperature?: number;
-    outputAudioTranscription?: Record<string, unknown>;
-    inputAudioTranscription?: Record<string, unknown>;
-    historyConfig?: Record<string, unknown>;
+    /** e.g. "models/gemini-3.1-flash-live-preview" */
+    model: string;
 }
 
+/**
+ * Thin wrapper around the Gemini Live WebSocket. The session config (prompt,
+ * voice, tools, transcription) is locked into the ephemeral token by the
+ * backend, so the setup message here only names the model.
+ */
 export class GeminiLiveAPI {
-    private token: string;
     private model: string;
-    private modelUri: string;
-    private systemInstruction: string;
-    private voiceName: string;
-    private responseModalities: string[];
-    private temperature: number;
     private serviceUrl: string;
-    private outputAudioTranscription: Record<string, unknown> | null;
-    private inputAudioTranscription: Record<string, unknown> | null;
-    private historyConfig: Record<string, unknown> | null;
     private ws: WebSocket | null = null;
     private setupComplete = false;
 
@@ -41,25 +37,15 @@ export class GeminiLiveAPI {
     onError: (message: string) => void = () => {};
 
     constructor(options: GeminiLiveAPIOptions) {
-        this.token = options.token;
-        this.model = options.model ?? "gemini-3.1-flash-live-preview";
-        this.modelUri = `models/${this.model}`;
-        this.systemInstruction = options.systemInstruction ?? "You are a friendly interview coach. Keep responses brief and conversational.";
-        this.voiceName = options.voiceName ?? "Puck";
-        this.responseModalities = options.responseModalities ?? ["AUDIO"];
-        this.temperature = options.temperature ?? 1.0;
-        this.outputAudioTranscription = options.outputAudioTranscription ?? null;
-        this.inputAudioTranscription = options.inputAudioTranscription ?? null;
-        this.historyConfig = options.historyConfig ?? null;
-
-        this.serviceUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${this.token}`;
+        this.model = options.model;
+        this.serviceUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained?access_token=${options.token}`;
     }
 
     connect() {
         this.ws = new WebSocket(this.serviceUrl);
 
         this.ws.onopen = () => {
-            this.sendSetupMessage();
+            this.send({ setup: { model: this.model } });
         };
 
         this.ws.onclose = () => {
@@ -109,17 +95,11 @@ export class GeminiLiveAPI {
         }
     }
 
-    /** Send text via clientContent — use for the first turn only when
-     *  historyConfig.initialHistoryInClientContent is enabled. */
-    sendTextMessage(text: string) {
-        this.send({
-            clientContent: {
-                turns: [{ role: "user", parts: [{ text }] }],
-            },
-        });
-    }
-
-    /** Send text via realtimeInput — use for all turns after the first. */
+    /**
+     * Send text as if the candidate said it. The model answers straight away.
+     * (clientContent turns are only accepted as initial history on this model,
+     * and the model waits silently after them.)
+     */
     sendRealtimeText(text: string) {
         this.send({ realtimeInput: { text } });
     }
@@ -132,47 +112,19 @@ export class GeminiLiveAPI {
         });
     }
 
+    /** The model pauses after a function call until it gets a response. */
+    sendToolResponse(calls: FunctionCall[], response: Record<string, unknown>) {
+        this.send({
+            toolResponse: {
+                functionResponses: calls.map((call) => ({ id: call.id, name: call.name, response })),
+            },
+        });
+    }
+
     private send(message: object) {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify(message));
         }
-    }
-
-    private sendSetupMessage() {
-        const setup: Record<string, any> = {
-            model: this.modelUri,
-            generationConfig: {
-                responseModalities: this.responseModalities,
-                temperature: this.temperature,
-                speechConfig: {
-                    voiceConfig: {
-                        prebuiltVoiceConfig: {
-                            voiceName: this.voiceName,
-                        },
-                    },
-                },
-            },
-            systemInstruction: {
-                parts: [{ text: this.systemInstruction }],
-            },
-            realtimeInputConfig: {
-                automaticActivityDetection: {},
-                activityHandling: "ACTIVITY_HANDLING_UNSPECIFIED",
-                turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
-            },
-        };
-
-        if (this.outputAudioTranscription) {
-            setup.outputAudioTranscription = this.outputAudioTranscription;
-        }
-        if (this.inputAudioTranscription) {
-            setup.inputAudioTranscription = this.inputAudioTranscription;
-        }
-        if (this.historyConfig) {
-            setup.historyConfig = this.historyConfig;
-        }
-
-        this.send({ setup });
     }
 
     private parseResponse(data: any): GeminiResponse[] {
@@ -180,6 +132,11 @@ export class GeminiLiveAPI {
 
         if (data?.setupComplete) {
             responses.push({ type: "SETUP_COMPLETE", data: "", endOfTurn: false });
+            return responses;
+        }
+
+        if (data?.toolCall?.functionCalls?.length) {
+            responses.push({ type: "TOOL_CALL", data: data.toolCall.functionCalls as FunctionCall[], endOfTurn: false });
             return responses;
         }
 

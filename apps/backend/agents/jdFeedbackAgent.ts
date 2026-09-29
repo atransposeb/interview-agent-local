@@ -66,6 +66,10 @@ export async function generateJobMatchFeedback(resumeData: ResumeData, githubDat
         };
     }
 
+    return keywordJobMatch(jobDescription, resumeData, githubData);
+}
+
+export function keywordJobMatch(jobDescription: string, resumeData: ResumeData, githubData: GithubRepo[]): JobMatchFeedback {
     const jdKeywords = keywords(jobDescription).slice(0, 40);
     const profileText = userSignalText(resumeData, githubData).toLowerCase();
     const matchedSignals = jdKeywords.filter((keyword) => profileText.includes(keyword)).slice(0, 10);

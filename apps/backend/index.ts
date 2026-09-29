@@ -26,7 +26,7 @@ app.use((req, res, next) => {
 app.post("/api/v1/pre-interview", async (req, res, next) => {
     const { success, data } = PreInterviewRequestSchema.safeParse(req.body);
     if (!success) {
-        return res.status(411).json({ message: "Invalid request body" });
+        return res.status(400).json({ message: "Invalid request body" });
     }
 
     const githubUrl = data.githubUrl.endsWith("/") ? data.githubUrl.slice(0, -1) : data.githubUrl;

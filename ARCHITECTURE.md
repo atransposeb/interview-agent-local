@@ -306,7 +306,7 @@ PostgreSQL
 
 - `apps/backend/Dockerfile` (built from the repository root) installs the workspace with the frozen lockfile, generates the Prisma client, and runs `start:prod`: `prisma migrate deploy`, then the API, as the unprivileged `bun` user. `.dockerignore` keeps `node_modules`, builds, generated code, and `.env` files out of the image.
 - `prisma.config.ts` reads `DATABASE_URL` directly, so `prisma generate` works in build environments without a database; `migrate` still fails clearly without one.
-- `railway.json` points Railway at that Dockerfile, health-checks `/health`, and limits redeploys to backend changes.
+- `render.yaml` (a Render Blueprint) and `railway.json` both point at that Dockerfile, health-check `/health`, and limit redeploys to backend changes. The free setup is Render for the API and Neon for Postgres; Render's free Postgres expires, so the Blueprint defines no database.
 - The frontend's `BUN_PUBLIC_*` variables are declared in `turbo.json`, so Turbo passes them to the build and includes them in its cache key. `build.ts` fails a CI build (`CI` set) without `BUN_PUBLIC_BACKEND_URL`, and `config.ts` drops a trailing slash from it.
 
 ## Database Design

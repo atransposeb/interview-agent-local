@@ -1,0 +1,25 @@
+# Render Blueprint for the API: New > Blueprint, then pick this repository.
+# The database is not defined here because Render's free Postgres expires;
+# use Neon (or any Postgres) and paste its connection string as DATABASE_URL.
+services:
+  - type: web
+    name: fitfortherole-api
+    runtime: docker
+    plan: free
+    # Put the database in the same region; every request makes several queries.
+    region: singapore
+    dockerfilePath: ./apps/backend/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    buildFilter:
+      paths:
+        - apps/backend/**
+        - package.json
+        - bun.lock
+    envVars:
+      # Neon's direct (not "-pooler") connection string: migrations run at startup.
+      - key: DATABASE_URL
+        sync: false
+      # The frontend's origin, e.g. https://fitfortherole.pages.dev (comma-separate several).
+      - key: FRONTEND_URL
+        sync: false

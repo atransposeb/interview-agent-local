@@ -87,18 +87,23 @@ Free instances sleep after about 15 minutes without traffic and take up to a min
 
 [`railway.json`](railway.json) does the same job on Railway: add the repository as a service at the repository root and set the same variables (with Railway's Postgres, `DATABASE_URL` is `${{Postgres.DATABASE_URL}}`). Any other container host works too: build from the repository root with `docker build -f apps/backend/Dockerfile .` and set the same variables. `PORT` is read from the environment.
 
-### Frontend on Cloudflare Pages
+### Frontend on Cloudflare
 
-Connect the repository and use:
+In the Cloudflare dashboard, go to **Workers & Pages** > **Create** and import this repository. Cloudflare creates a Worker that serves static files; [`wrangler.jsonc`](wrangler.jsonc) tells it to upload `apps/frontend/dist` and to answer unknown paths such as `/result/<id>` with `index.html`. The `name` in that file must match the Worker's name in the dashboard.
 
 | Setting                  | Value                          |
 | ------------------------ | ------------------------------ |
+| Root directory           | leave empty                    |
 | Build command            | `bun install && bun run build` |
-| Build output directory   | `apps/frontend/dist`           |
+| Deploy command           | `npx wrangler deploy`          |
 | `BUN_PUBLIC_BACKEND_URL` | the API URL from Render        |
 | `BUN_VERSION`            | `1.3.14`                       |
 
-Pages serves `index.html` for unknown paths, so links like `/result/<id>` work. On another static host, add that fallback yourself (for Netlify, a `_redirects` file with `/* /index.html 200`).
+Add the two variables as build variables. The site is then at `https://<worker-name>.<your-subdomain>.workers.dev`; set that as `FRONTEND_URL` on Render.
+
+A Cloudflare Pages project works too: same build command, build output directory `apps/frontend/dist`, and no deploy command. On another static host, add the `index.html` fallback yourself (for Netlify, a `_redirects` file with `/* /index.html 200`).
+
+The repository pins Bun in `devEngines` with `onFail: "warn"`, so tools that go through npm (like `npx wrangler`) still run.
 
 The API URL is baked in at build time, so rebuild the frontend when it changes. A CI build without `BUN_PUBLIC_BACKEND_URL` fails rather than shipping a site that calls `localhost`.
 

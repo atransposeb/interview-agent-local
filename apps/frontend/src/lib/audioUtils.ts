@@ -91,6 +91,8 @@ export class AudioStreamer {
     private mediaStream: MediaStream | null = null;
     private sampleRate = 16000;
     isStreaming = false;
+    /** Called with the loudness (RMS, 0 to 1) of each captured chunk, for level meters. */
+    onLevel: ((level: number) => void) | null = null;
 
     constructor(client: GeminiLiveAPI) {
         this.client = client;
@@ -126,6 +128,7 @@ export class AudioStreamer {
         this.audioWorklet.port.onmessage = (event) => {
             if (!this.isStreaming) return;
             if (event.data.type === "audio") {
+                this.onLevel?.(this.rms(event.data.data));
                 const pcmData = this.convertToPCM16(event.data.data);
                 const base64 = this.arrayBufferToBase64(pcmData);
                 if (this.client.connected) {
@@ -164,6 +167,15 @@ export class AudioStreamer {
             this.audioContext.close();
             this.audioContext = null;
         }
+    }
+
+    private rms(samples: Float32Array) {
+        let sum = 0;
+        for (let i = 0; i < samples.length; i++) {
+            const sample = samples[i] ?? 0;
+            sum += sample * sample;
+        }
+        return Math.sqrt(sum / (samples.length || 1));
     }
 
     private convertToPCM16(float32: Float32Array): ArrayBuffer {

@@ -2,6 +2,17 @@ import tailwind from "bun-plugin-tailwind";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 
+// The API URL is baked into the bundle. Without it the site would call
+// localhost, so CI builds (Cloudflare Pages, Netlify, ...) refuse to continue.
+if (!process.env.BUN_PUBLIC_BACKEND_URL) {
+  const message = "BUN_PUBLIC_BACKEND_URL is not set, so this build will call http://localhost:3001.";
+  if (process.env.CI) {
+    console.error(`${message} Set it to the API's public URL.`);
+    process.exit(1);
+  }
+  console.warn(`Warning: ${message}`);
+}
+
 const outdir = path.join(process.cwd(), "dist");
 await rm(outdir, { recursive: true, force: true });
 

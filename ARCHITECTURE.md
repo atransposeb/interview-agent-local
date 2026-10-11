@@ -211,10 +211,11 @@ PostgreSQL
 `apps/backend/index.ts`
 
 - JSON body limit of `6mb`, enough for a base64 resume PDF.
-- Manual CORS for `FRONTEND_URL` (default `http://localhost:3000`), allowing the `X-Gemini-Api-Key` header.
+- Manual CORS for the comma-separated origins in `FRONTEND_URL` (default `http://localhost:3000`; trailing slashes ignored, see `lib/origins.ts`), allowing the `X-Gemini-Api-Key` header.
+- `GET /health`: `200` when the database answers `SELECT 1`, otherwise `503`, for the host's health checks.
 - Mounts `routes/interviews.ts` at `/api/v1`.
 - Error middleware: `HttpError` becomes its status and message, an oversized body `413`, malformed JSON `400`, and anything else `500`. Axios errors are logged without request headers so API keys never reach the logs.
-- Listens on port `3001`.
+- Listens on `PORT` (default `3001`). On `SIGTERM` it stops accepting connections, lets in-flight requests finish (up to 60 seconds), and disconnects Prisma.
 
 ### Routes
 
@@ -300,6 +301,13 @@ PostgreSQL
 ### Proxy Configuration
 
 `apps/backend/proxy.ts` exports an `HttpsProxyAgent` when `PROXY_URL` is set. Every outbound axios call passes it and disables axios's own proxy detection (`proxy: false`).
+
+### Deployment
+
+- `apps/backend/Dockerfile` (built from the repository root) installs the workspace with the frozen lockfile, generates the Prisma client, and runs `start:prod`: `prisma migrate deploy`, then the API, as the unprivileged `bun` user. `.dockerignore` keeps `node_modules`, builds, generated code, and `.env` files out of the image.
+- `prisma.config.ts` reads `DATABASE_URL` directly, so `prisma generate` works in build environments without a database; `migrate` still fails clearly without one.
+- `railway.json` points Railway at that Dockerfile, health-checks `/health`, and limits redeploys to backend changes.
+- The frontend's `BUN_PUBLIC_*` variables are declared in `turbo.json`, so Turbo passes them to the build and includes them in its cache key. `build.ts` fails a CI build (`CI` set) without `BUN_PUBLIC_BACKEND_URL`, and `config.ts` drops a trailing slash from it.
 
 ## Database Design
 
@@ -421,7 +429,7 @@ Errors: `401` missing or rejected Gemini key (only when the interview still need
 
 ## Configuration
 
-Backend (`apps/backend/.env`; see `.env.example`): `DATABASE_URL` (required), `GEMINI_API_KEY` (optional fallback; leave it empty so users bring their own key), `FRONTEND_URL`, `GITHUB_TOKEN`, `PROXY_URL`, `GEMINI_LIVE_MODEL`, `GEMINI_TEXT_MODEL`, and `GEMINI_TEXT_FALLBACK_MODEL`.
+Backend (`apps/backend/.env`; see `.env.example`): `DATABASE_URL` (required), `GEMINI_API_KEY` (optional fallback; leave it empty so users bring their own key), `FRONTEND_URL` (comma-separated origins), `PORT`, `GITHUB_TOKEN`, `PROXY_URL`, `GEMINI_LIVE_MODEL`, `GEMINI_TEXT_MODEL`, and `GEMINI_TEXT_FALLBACK_MODEL`.
 
 Frontend (`apps/frontend/.env`): `BUN_PUBLIC_BACKEND_URL` (default `http://localhost:3001`), inlined at build time. `config.ts` guards the read because an unset `BUN_PUBLIC_*` variable is left as a `process.env` expression, and `process` doesn't exist in browsers.
 
@@ -448,4 +456,4 @@ Frontend (`apps/frontend/.env`): `BUN_PUBLIC_BACKEND_URL` (default `http://local
 - Prompts include the candidate's name, work history, skills, and projects, but not email, phone, or raw resume text. Candidate-supplied text is marked as data in every prompt.
 - Resume data (including contacts for pasted resumes), GitHub metadata, transcripts, and evaluations are stored in PostgreSQL. Deleting an interview deletes its messages.
 - Outbound call failures are logged as status and message only, never with request headers.
-- CORS is restricted to `FRONTEND_URL`.
+- CORS is restricted to the origins in `FRONTEND_URL`.

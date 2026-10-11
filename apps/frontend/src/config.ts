@@ -12,4 +12,5 @@ function readBackendUrl() {
     }
 }
 
-export const BACKEND_URL = readBackendUrl();
+// A trailing slash would turn "/api/v1/..." into "//api/v1/...".
+export const BACKEND_URL = readBackendUrl().replace(/\/+$/, "");

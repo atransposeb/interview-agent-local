@@ -2,6 +2,7 @@ import axios from "axios";
 import express from "express";
 import { interviewsRouter } from "./routes/interviews";
 import { describeError, HttpError } from "./lib/httpError";
+import { API_KEY_HEADER } from "./lib/apiKey";
 
 const app = express();
 // Room for a base64-encoded resume PDF (4 MB becomes about 5.4 MB).
@@ -9,7 +10,7 @@ app.use(express.json({ limit: "6mb" }));
 
 app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", process.env.FRONTEND_URL || "http://localhost:3000");
-    res.header("Access-Control-Allow-Headers", "Content-Type");
+    res.header("Access-Control-Allow-Headers", `Content-Type, ${API_KEY_HEADER}`);
     res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
 
     if (req.method === "OPTIONS") {

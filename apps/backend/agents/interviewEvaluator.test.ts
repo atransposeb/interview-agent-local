@@ -35,10 +35,14 @@ describe("formatTranscript", () => {
 
 describe("evaluateInterview", () => {
     test("skips the model when the candidate barely spoke", async () => {
-        const evaluation = await evaluateInterview(context, [
-            { role: "assistant", text: "Hi! Could you introduce yourself?" },
-            { role: "user", text: "Uh, hi, sorry, one second." },
-        ]);
+        const evaluation = await evaluateInterview(
+            context,
+            [
+                { role: "assistant", text: "Hi! Could you introduce yourself?" },
+                { role: "user", text: "Uh, hi, sorry, one second." },
+            ],
+            "unused-key",
+        );
 
         expect(evaluation.overallScore).toBe(0);
         expect(evaluation.questions).toEqual([]);

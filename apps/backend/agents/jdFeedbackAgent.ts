@@ -36,8 +36,14 @@ export function formatRepos(repos: Pick<GithubRepo, "name" | "description" | "la
         .join("\n");
 }
 
-export async function assessJobFit(jobDescription: string, resume: ResumeSource, repos: GithubRepo[]): Promise<JobMatchFeedback> {
+export async function assessJobFit(
+    jobDescription: string,
+    resume: ResumeSource,
+    repos: GithubRepo[],
+    apiKey: string,
+): Promise<JobMatchFeedback> {
     const fit = await generateJson({
+        apiKey,
         schema: JobFitSchema,
         system: SYSTEM_PROMPT,
         parts: [

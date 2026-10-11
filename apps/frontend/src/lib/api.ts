@@ -1,4 +1,7 @@
 import { BACKEND_URL } from "@/config";
+import { getApiKey } from "@/lib/apiKey";
+
+const API_KEY_HEADER = "X-Gemini-Api-Key";
 
 export class ApiError extends Error {
     constructor(
@@ -10,9 +13,15 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+    // The user's Gemini key rides along on every call; the server uses it for
+    // that request only.
+    const headers = new Headers(init?.headers);
+    const apiKey = getApiKey();
+    if (apiKey && !headers.has(API_KEY_HEADER)) headers.set(API_KEY_HEADER, apiKey);
+
     let response: Response;
     try {
-        response = await fetch(`${BACKEND_URL}${path}`, init);
+        response = await fetch(`${BACKEND_URL}${path}`, { ...init, headers });
     } catch {
         throw new ApiError(0, "Can't reach the server. Check that the backend is running.");
     }
@@ -24,12 +33,26 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return body as T;
 }
 
-function postJson<T>(path: string, body: unknown) {
+function postJson<T>(path: string, body: unknown, headers?: Record<string, string>) {
     return request<T>(path, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...headers },
         body: JSON.stringify(body),
     });
+}
+
+export interface ServerConfig {
+    /** True when the server has no Gemini key of its own, so users must bring one. */
+    apiKeyRequired: boolean;
+}
+
+export function getConfig() {
+    return request<ServerConfig>("/api/v1/config");
+}
+
+/** Resolves when Google accepts the key; rejects with a 401 ApiError when it doesn't. */
+export function verifyApiKey(apiKey: string) {
+    return postJson<null>("/api/v1/api-key/verify", {}, { [API_KEY_HEADER]: apiKey });
 }
 
 export interface PreInterviewInput {

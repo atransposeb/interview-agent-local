@@ -27,15 +27,18 @@ export function resumeParts(source: ResumeSource): GeminiPart[] {
         : [{ text: source.text }];
 }
 
-export async function extractResume(source: ResumeSource): Promise<ResumeData> {
+export async function extractResume(source: ResumeSource, apiKey: string): Promise<ResumeData> {
     try {
         const resume = await generateJson({
+            apiKey,
             schema: ExtractedResumeSchema,
             system: SYSTEM_PROMPT,
             parts: resumeParts(source),
         });
         return { ...resume, rawText: source.kind === "text" ? normalizeText(source.text) : "" };
     } catch (error) {
+        // A rejected key fails the whole interview, so the fallback would only delay the error.
+        if (error instanceof HttpError) throw error;
         if (source.kind === "pdf") {
             console.warn("Resume PDF extraction failed:", describeError(error));
             throw new HttpError(502, "Couldn't read that PDF right now. Try again, or paste your resume as text.");

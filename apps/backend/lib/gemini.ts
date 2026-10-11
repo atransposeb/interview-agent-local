@@ -1,6 +1,7 @@
 import axios from "axios";
 import { z } from "zod";
 import { httpsAgent } from "../proxy";
+import { HttpError } from "./httpError";
 
 // Used for resume extraction, job fit, and scoring. Flash-Lite models answered
 // in 1-4s while the larger Flash models often returned 503 "high demand", so a
@@ -11,6 +12,7 @@ const GEMINI_TEXT_FALLBACK_MODEL = process.env.GEMINI_TEXT_FALLBACK_MODEL || "ge
 export type GeminiPart = { text: string } | { inlineData: { mimeType: string; data: string } };
 
 interface GenerateJsonOptions<T extends z.ZodType> {
+    apiKey: string;
     schema: T;
     system: string;
     parts: GeminiPart[];
@@ -22,6 +24,7 @@ interface GenerateJsonOptions<T extends z.ZodType> {
  * JSON schema and also validates the reply, so callers get typed data or an error.
  */
 export async function generateJson<T extends z.ZodType>({
+    apiKey,
     schema,
     system,
     parts,
@@ -40,7 +43,7 @@ export async function generateJson<T extends z.ZodType>({
             {
                 headers: {
                     "Content-Type": "application/json",
-                    "x-goog-api-key": process.env.GEMINI_API_KEY,
+                    "x-goog-api-key": apiKey,
                 },
                 httpsAgent,
                 proxy: false,
@@ -76,8 +79,40 @@ async function withFallback<T>(request: (model: string) => Promise<T>): Promise<
         try {
             return await request(models[attempt]!);
         } catch (error) {
+            const rejected = keyRejection(error);
+            if (rejected) throw rejected;
             if (attempt === models.length - 1 || !isRetryable(error)) throw error;
             await Bun.sleep(1_000 * (attempt + 1));
         }
+    }
+}
+
+/**
+ * Google answers a wrong, revoked, or unauthorized key with 400 "API key not
+ * valid", 401, or 403. Returns the error to show the user, or null for any
+ * other failure.
+ */
+export function keyRejection(error: unknown): HttpError | null {
+    if (!axios.isAxiosError(error)) return null;
+    const status = error.response?.status;
+    const detail = String(error.response?.data?.error?.message ?? "");
+    if (status === 401 || status === 403 || (status === 400 && /api key/i.test(detail))) {
+        return new HttpError(401, "Google didn't accept that Gemini API key. Check it in Google AI Studio and try again.");
+    }
+    return null;
+}
+
+/** Makes the cheapest authenticated call there is, to catch a bad key before any real work. */
+export async function verifyApiKey(apiKey: string) {
+    try {
+        await axios.get("https://generativelanguage.googleapis.com/v1beta/models", {
+            params: { pageSize: 1 },
+            headers: { "x-goog-api-key": apiKey },
+            httpsAgent,
+            proxy: false,
+            timeout: 10_000,
+        });
+    } catch (error) {
+        throw keyRejection(error) ?? new HttpError(502, "Couldn't reach Google to check the key. Try again in a moment.");
     }
 }

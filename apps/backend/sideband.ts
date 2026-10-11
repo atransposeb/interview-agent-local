@@ -8,7 +8,7 @@ import type { LiveSetup } from "./lib/liveSession";
  * browser connects with just the model name, and anything else it sends in its
  * own setup message is ignored.
  */
-export async function createEphemeralToken(setup: LiveSetup): Promise<string> {
+export async function createEphemeralToken(setup: LiveSetup, apiKey: string): Promise<string> {
     const now = new Date();
     const response = await axios.post(
         "https://generativelanguage.googleapis.com/v1alpha/auth_tokens",
@@ -21,7 +21,7 @@ export async function createEphemeralToken(setup: LiveSetup): Promise<string> {
         {
             headers: {
                 "Content-Type": "application/json",
-                "x-goog-api-key": process.env.GEMINI_API_KEY,
+                "x-goog-api-key": apiKey,
             },
             httpsAgent,
             proxy: false,

@@ -6,6 +6,8 @@ import { extractResume, type ResumeSource } from "../agents/resumeExtractor";
 import { assessJobFit, keywordJobMatch } from "../agents/jdFeedbackAgent";
 import { evaluateInterview } from "../agents/interviewEvaluator";
 import { describeError, HttpError } from "../lib/httpError";
+import { apiKeyRequired, geminiApiKey } from "../lib/apiKey";
+import { keyRejection, verifyApiKey } from "../lib/gemini";
 import { readInterviewContext } from "../lib/interviewContext";
 import { buildLiveSetup, INTERVIEW_DURATION_SECONDS } from "../lib/liveSession";
 import { prisma } from "../prisma/db";
@@ -47,11 +49,11 @@ async function loadTranscript(interviewId: string) {
     }));
 }
 
-async function scoreInterview(interviewId: string) {
+async function scoreInterview(interviewId: string, apiKey: string) {
     const interview = await findInterview(interviewId);
     if (interview.evaluation) return; // scored by a request that finished just before this one
 
-    const evaluation = await evaluateInterview(readInterviewContext(interview), await loadTranscript(interviewId));
+    const evaluation = await evaluateInterview(readInterviewContext(interview), await loadTranscript(interviewId), apiKey);
     await prisma.interview.update({
         where: { id: interviewId },
         data: {
@@ -61,16 +63,28 @@ async function scoreInterview(interviewId: string) {
     });
 }
 
-function scoreOnce(interviewId: string) {
+function scoreOnce(interviewId: string, apiKey: string) {
     let run = evaluationsInFlight.get(interviewId);
     if (!run) {
-        run = scoreInterview(interviewId).finally(() => evaluationsInFlight.delete(interviewId));
+        run = scoreInterview(interviewId, apiKey).finally(() => evaluationsInFlight.delete(interviewId));
         evaluationsInFlight.set(interviewId, run);
     }
     return run;
 }
 
+// Tells the browser whether to ask for the user's own Gemini key.
+interviewsRouter.get("/config", (_req, res) => {
+    return res.status(200).json({ apiKeyRequired: apiKeyRequired() });
+});
+
+// Checks a key before the user waits on resume processing with it.
+interviewsRouter.post("/api-key/verify", async (req, res) => {
+    await verifyApiKey(geminiApiKey(req));
+    return res.status(204).end();
+});
+
 interviewsRouter.post("/pre-interview", async (req, res) => {
+    const apiKey = geminiApiKey(req);
     const parsed = PreInterviewRequestSchema.safeParse(req.body);
     if (!parsed.success) {
         return res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Invalid request body" });
@@ -84,12 +98,13 @@ interviewsRouter.post("/pre-interview", async (req, res) => {
     // 404 rejects once and never goes unhandled.
     const githubPromise = loadGithubRepos(githubUrl ? parseGithubUsername(githubUrl) : null);
     const fitPromise = githubPromise.then((github) =>
-        assessJobFit(jobDescription, resume, github.repos).catch((error) => {
+        assessJobFit(jobDescription, resume, github.repos, apiKey).catch((error) => {
+            if (error instanceof HttpError) throw error;
             console.warn("Job fit assessment failed, using keyword matching:", describeError(error));
             return null;
         }),
     );
-    const [github, resumeData, llmFit] = await Promise.all([githubPromise, extractResume(resume), fitPromise]);
+    const [github, resumeData, llmFit] = await Promise.all([githubPromise, extractResume(resume, apiKey), fitPromise]);
     const jdFeedback = llmFit ?? keywordJobMatch(jobDescription, resumeData, github.repos);
 
     const interview = await prisma.interview.create({
@@ -115,11 +130,14 @@ interviewsRouter.post("/interviews/:id/session", async (req, res) => {
         throw new HttpError(409, "This interview has already finished");
     }
 
+    const apiKey = geminiApiKey(req);
     const setup = buildLiveSetup(readInterviewContext(interview));
     let token: string;
     try {
-        token = await createEphemeralToken(setup);
+        token = await createEphemeralToken(setup, apiKey);
     } catch (error) {
+        const rejected = keyRejection(error);
+        if (rejected) throw rejected;
         console.error("Failed to create Gemini session:", describeError(error));
         throw new HttpError(502, "Couldn't start the voice session. Please try again.");
     }
@@ -181,9 +199,12 @@ interviewsRouter.post("/interviews/:id/complete", async (req, res) => {
     });
 
     if (!interview.evaluation) {
+        // Only scoring needs a key, so a finished report opens without one.
+        const apiKey = geminiApiKey(req);
         try {
-            await scoreOnce(interview.id);
+            await scoreOnce(interview.id, apiKey);
         } catch (error) {
+            if (error instanceof HttpError) throw error;
             console.error("Interview scoring failed:", describeError(error));
             throw new HttpError(502, "Couldn't score the interview right now. Please try again in a moment.");
         }

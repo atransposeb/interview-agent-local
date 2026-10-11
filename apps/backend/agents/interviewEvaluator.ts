@@ -77,12 +77,17 @@ export function unansweredEvaluation(): InterviewEvaluation {
     };
 }
 
-export async function evaluateInterview(context: InterviewContext, transcript: TranscriptLine[]): Promise<InterviewEvaluation> {
+export async function evaluateInterview(
+    context: InterviewContext,
+    transcript: TranscriptLine[],
+    apiKey: string,
+): Promise<InterviewEvaluation> {
     if (candidateWordCount(transcript) < MIN_CANDIDATE_WORDS) {
         return unansweredEvaluation();
     }
 
     const rubric = await generateJson({
+        apiKey,
         schema: RubricSchema,
         system: SYSTEM_PROMPT,
         parts: [

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { AudioLines, Lightbulb, LoaderCircle, MessageSquareText, Mic, PhoneOff, RotateCcw, UserRound } from "lucide-react";
+import { AudioLines, LoaderCircle, MessageSquareText, Mic, MicOff, PhoneOff, RotateCcw, UserRound } from "lucide-react";
 import { GeminiLiveAPI, type FunctionCall } from "@/lib/geminiLive";
 import { AudioStreamer, AudioPlayer } from "@/lib/audioUtils";
 import { ApiError, createSession, saveMessages } from "@/lib/api";
@@ -57,7 +57,7 @@ export function Interview() {
     const transcriptRef = useRef(createTranscript());
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const scrollRef = useRef<HTMLDivElement | null>(null);
-    const levelRef = useRef<HTMLSpanElement | null>(null);
+    const levelRef = useRef<HTMLButtonElement | null>(null);
     const endRequestedRef = useRef(false);
     // First transcript seq after the clock ran out: the wrap-up turn.
     const wrapUpFromSeqRef = useRef<number | null>(null);
@@ -88,6 +88,7 @@ export function Interview() {
         audioStreamerRef.current?.stop();
         audioStreamerRef.current?.destroy();
         audioStreamerRef.current = null;
+        levelRef.current?.style.setProperty("--level", "0");
         setMicActive(false);
     }
 
@@ -402,122 +403,83 @@ export function Interview() {
             </header>
 
             <main className="mx-auto grid min-h-0 w-full max-w-6xl flex-1 grid-rows-[auto_minmax(0,1fr)] gap-4 p-4 sm:gap-5 sm:p-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] lg:grid-rows-1">
-                <section aria-label="Interview controls" className="flex min-h-0 flex-col gap-5">
-                    <div className="relative flex flex-col items-center gap-5 overflow-hidden rounded-[2rem] bg-forest px-6 py-6 text-center text-white shadow-2xl shadow-forest/20 sm:py-8 lg:flex-1 lg:justify-center lg:gap-7">
-                        <div aria-hidden="true" className="absolute -left-16 -top-16 size-56 rounded-full bg-lake/35 blur-3xl" />
-                        <div aria-hidden="true" className="absolute -bottom-20 -right-10 size-64 rounded-full bg-ochre/25 blur-3xl" />
-
-                        <div className="relative flex items-center gap-5 lg:flex-col lg:gap-7">
-                            <Orb phase={phase} speaking={speaker === "assistant"} />
-                            <div className="text-left lg:text-center" aria-live="polite">
-                                <p className="font-heading text-2xl font-semibold sm:text-3xl">{stage.title}</p>
-                                <p className="mt-1 text-sm text-sage-light">{stage.detail}</p>
-                            </div>
+                <section
+                    aria-label="Interview controls"
+                    className="relative flex flex-col items-center justify-center gap-6 overflow-hidden rounded-[2rem] bg-forest px-6 pb-8 pt-11 text-center text-white shadow-2xl shadow-forest/20 lg:gap-8"
+                >
+                    <div
+                        aria-hidden="true"
+                        className="absolute inset-0 bg-[radial-gradient(circle_at_50%_35%,rgba(58,123,191,0.28),transparent_60%)]"
+                    />
+                    {secondsLeft !== null && (
+                        <div aria-hidden="true" className="absolute inset-x-8 top-5 h-1 overflow-hidden rounded-full bg-white/10">
+                            <div
+                                className={cn("h-full rounded-full transition-[width] duration-1000 ease-linear", lowTime ? "bg-terracotta" : "bg-butter")}
+                                style={{ width: `${remainingPercent}%` }}
+                            />
                         </div>
+                    )}
 
-                        {phase === "error" || phase === "disconnected" ? (
-                            <div className="relative w-full max-w-md space-y-4">
-                                {phase === "error" && errorMessage && !needsKey && (
-                                    <p className="rounded-2xl bg-white/10 px-4 py-3 text-sm text-sage-light">{errorMessage}</p>
-                                )}
-                                {needsKey ? (
-                                    <div className="rounded-2xl bg-white p-4 text-left text-forest">
-                                        <ApiKeyField onKeyChange={(hasKey) => hasKey && retry()} />
-                                    </div>
-                                ) : (
-                                    <div className="flex flex-wrap justify-center gap-2">
-                                        <Button onClick={retry} className="rounded-full bg-white px-5 text-forest hover:bg-warm">
-                                            <RotateCcw /> Reconnect
+                    <Orb phase={phase} speaking={speaker === "assistant"} />
+
+                    <div className="relative" aria-live="polite">
+                        <p className="font-heading text-2xl font-semibold sm:text-3xl">{stage.title}</p>
+                        <p className="mt-1.5 text-sm text-sage-light">{stage.detail}</p>
+                    </div>
+
+                    {phase === "error" || phase === "disconnected" ? (
+                        <div className="relative w-full max-w-md space-y-4">
+                            {phase === "error" && errorMessage && !needsKey && (
+                                <p className="rounded-2xl bg-white/10 px-4 py-3 text-sm text-sage-light">{errorMessage}</p>
+                            )}
+                            {needsKey ? (
+                                <div className="rounded-2xl bg-white p-4 text-left text-forest">
+                                    <ApiKeyField onKeyChange={(hasKey) => hasKey && retry()} />
+                                </div>
+                            ) : (
+                                <div className="flex flex-wrap justify-center gap-2">
+                                    <Button onClick={retry} className="h-11 rounded-full bg-white px-5 text-forest hover:bg-warm">
+                                        <RotateCcw /> Reconnect
+                                    </Button>
+                                    {entries.length > 0 ? (
+                                        <Button
+                                            onClick={() => finishInterview({ waitForAudio: false })}
+                                            variant="outline"
+                                            className="h-11 rounded-full border-white/30 bg-transparent px-5 text-white hover:bg-white/10 hover:text-white"
+                                        >
+                                            Finish and see report
                                         </Button>
-                                        {entries.length > 0 ? (
-                                            <Button
-                                                onClick={() => finishInterview({ waitForAudio: false })}
-                                                variant="outline"
-                                                className="rounded-full border-white/30 bg-transparent px-5 text-white hover:bg-white/10 hover:text-white"
-                                            >
-                                                Finish and see report
-                                            </Button>
-                                        ) : (
-                                            <Button
-                                                asChild
-                                                variant="outline"
-                                                className="rounded-full border-white/30 bg-transparent px-5 text-white hover:bg-white/10 hover:text-white"
-                                            >
-                                                <Link to="/">Back to setup</Link>
-                                            </Button>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        ) : (
-                            <div className="relative flex w-full max-w-xs flex-col items-center gap-5">
-                                <div className="w-full">
-                                    <div className="flex justify-between text-xs text-sage-light">
-                                        <span>Time left</span>
-                                        <span className="font-semibold tabular-nums text-white">
-                                            {secondsLeft !== null ? formatClock(secondsLeft) : "–:––"}
-                                        </span>
-                                    </div>
-                                    <div aria-hidden="true" className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/15">
-                                        <div
-                                            className={cn("h-full rounded-full transition-[width] duration-1000 ease-linear", lowTime ? "bg-terracotta" : "bg-butter")}
-                                            style={{ width: `${remainingPercent}%` }}
-                                        />
-                                    </div>
+                                    ) : (
+                                        <Button
+                                            asChild
+                                            variant="outline"
+                                            className="h-11 rounded-full border-white/30 bg-transparent px-5 text-white hover:bg-white/10 hover:text-white"
+                                        >
+                                            <Link to="/">Back to setup</Link>
+                                        </Button>
+                                    )}
                                 </div>
-
-                                <div className="flex items-center gap-4 lg:flex-col lg:gap-3">
-                                    <button
-                                        type="button"
-                                        onClick={toggleMic}
-                                        disabled={!connected}
-                                        aria-pressed={micActive}
-                                        aria-label={micActive ? "Turn off microphone" : "Turn on microphone"}
-                                        className={cn(
-                                            "relative grid size-16 shrink-0 place-items-center rounded-full transition-all duration-300 outline-none focus-visible:ring-4 focus-visible:ring-white/40 disabled:cursor-not-allowed disabled:opacity-40 sm:size-20",
-                                            micActive ? "bg-terracotta-deep text-white" : "bg-white text-forest hover:scale-105",
-                                            connected && !micActive && "shadow-[0_0_0_8px_rgba(255,255,255,0.12)]",
-                                        )}
-                                    >
-                                        {micActive && (
-                                            <span
-                                                ref={levelRef}
-                                                aria-hidden="true"
-                                                className="absolute inset-0 rounded-full bg-terracotta/60 transition-transform duration-100"
-                                                style={{ transform: "scale(calc(1 + var(--level, 0) * 0.55))" }}
-                                            />
-                                        )}
-                                        <Mic className="relative size-7" />
-                                    </button>
-                                    <div className="text-left lg:text-center">
-                                        <p className="text-sm font-semibold">{micActive ? "Mic on · tap to mute" : "Tap to switch on your mic"}</p>
-                                        <p className="hidden text-xs text-sage-light sm:block">
-                                            or press{" "}
-                                            <kbd className="rounded-md border border-white/25 bg-white/10 px-1.5 py-0.5 font-body text-[11px] font-semibold">M</kbd>
-                                        </p>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="hidden rounded-[1.75rem] border border-stone bg-white/80 p-5 shadow-sm lg:block">
-                        <p className="flex items-center gap-2 text-sm font-semibold text-forest">
-                            <Lightbulb className="size-4 text-ochre" aria-hidden="true" /> Quick tips
-                        </p>
-                        <ul className="mt-3 space-y-2 text-sm leading-relaxed text-moss">
-                            {[
-                                { tip: "Structure answers: the situation, what you did, and the result.", dot: "bg-lake" },
-                                { tip: "Numbers, trade-offs, and outcomes raise your depth score.", dot: "bg-heather" },
-                                { tip: "Need to cut in? Just start talking; the interviewer will stop.", dot: "bg-ochre" },
-                            ].map(({ tip, dot }) => (
-                                <li key={tip} className="flex gap-2.5">
-                                    <span aria-hidden="true" className={cn("mt-2 size-1.5 shrink-0 rounded-full", dot)} />
-                                    {tip}
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
+                            )}
+                        </div>
+                    ) : (
+                        <button
+                            ref={levelRef}
+                            type="button"
+                            onClick={toggleMic}
+                            disabled={!connected}
+                            title="Shortcut: M"
+                            aria-keyshortcuts="M"
+                            className={cn(
+                                "relative inline-flex h-12 items-center gap-2.5 rounded-full px-6 text-sm font-semibold outline-none transition-[background-color,box-shadow] duration-150 focus-visible:ring-4 focus-visible:ring-white/30 disabled:cursor-not-allowed disabled:opacity-40",
+                                micActive ? "bg-terracotta-deep text-white" : "bg-white text-forest hover:bg-warm",
+                            )}
+                            // The ring grows with the microphone level while it's on.
+                            style={micActive ? { boxShadow: "0 0 0 calc(var(--level, 0) * 14px) rgba(194, 123, 102, 0.4)" } : undefined}
+                        >
+                            {micActive ? <MicOff className="size-4.5" /> : <Mic className="size-4.5" />}
+                            {micActive ? "Mute" : "Turn on mic"}
+                        </button>
+                    )}
                 </section>
 
                 <section
@@ -584,17 +546,17 @@ export function Interview() {
 function describeStage(phase: Phase, speaker: TranscriptEntry["role"] | null, micActive: boolean) {
     switch (phase) {
         case "connecting":
-            return { title: "Connecting", detail: "Getting your interviewer ready..." };
+            return { title: "Connecting", detail: "Getting your interviewer ready." };
         case "finishing":
-            return { title: "Wrapping up", detail: "Saving your interview..." };
+            return { title: "Wrapping up", detail: "Saving your interview." };
         case "disconnected":
-            return { title: "Disconnected", detail: "The voice connection closed. Your answers so far are saved." };
+            return { title: "Disconnected", detail: "Your answers so far are saved." };
         case "error":
             return { title: "Something went wrong", detail: "The interview couldn't continue." };
     }
     if (speaker === "assistant") return { title: "Interviewer speaking", detail: "Listen, then answer out loud." };
-    if (micActive) return { title: "Listening", detail: "Answer out loud. Take a breath if you need one." };
-    return { title: "Your mic is off", detail: "Switch it on when you're ready to answer." };
+    if (micActive) return { title: "Listening", detail: "Answer out loud. Take your time." };
+    return { title: "Your mic is off", detail: "Turn it on when you're ready to answer." };
 }
 
 function StatusPill({ phase }: { phase: Phase }) {
@@ -617,23 +579,22 @@ function StatusPill({ phase }: { phase: Phase }) {
 function Orb({ phase, speaking }: { phase: Phase; speaking: boolean }) {
     const bars = [0.45, 0.8, 1, 0.7, 0.5];
     return (
-        <div aria-hidden="true" className="relative grid size-24 shrink-0 place-items-center sm:size-28 lg:size-40">
+        <div aria-hidden="true" className="relative grid size-20 shrink-0 place-items-center sm:size-24 lg:size-28">
             {speaking && (
                 <>
-                    <span className="absolute inset-0 animate-ripple rounded-full bg-lake/45" />
-                    <span className="absolute inset-0 animate-ripple rounded-full bg-sage/50 [animation-delay:1.2s]" />
+                    <span className="absolute inset-0 animate-ripple rounded-full bg-lake/40" />
+                    <span className="absolute inset-0 animate-ripple rounded-full bg-sage/40 [animation-delay:1.2s]" />
                 </>
             )}
             <span
                 className={cn(
-                    "absolute inset-2 rounded-full bg-gradient-to-br from-sage via-lake to-forest-deep shadow-[inset_0_2px_12px_rgba(0,0,0,0.25)] transition-transform duration-500",
+                    "relative grid size-full place-items-center rounded-full bg-gradient-to-br from-sage to-lake shadow-[0_12px_40px_-12px_rgba(58,123,191,0.7)] transition-transform duration-500",
                     speaking && "scale-105",
-                    (phase === "error" || phase === "disconnected") && "opacity-50 grayscale",
+                    (phase === "error" || phase === "disconnected") && "opacity-40 grayscale",
                 )}
-            />
-            <span className="relative grid size-14 place-items-center rounded-full bg-white/12 ring-1 ring-white/20 backdrop-blur sm:size-16 lg:size-20">
+            >
                 {phase === "connecting" ? (
-                    <LoaderCircle className="size-6 animate-spin lg:size-7" />
+                    <LoaderCircle className="size-7 animate-spin" />
                 ) : speaking ? (
                     <span className="flex h-7 items-center gap-1">
                         {bars.map((height, index) => (
@@ -645,7 +606,7 @@ function Orb({ phase, speaking }: { phase: Phase; speaking: boolean }) {
                         ))}
                     </span>
                 ) : (
-                    <AudioLines className="size-6 lg:size-7" />
+                    <AudioLines className="size-7" />
                 )}
             </span>
         </div>
